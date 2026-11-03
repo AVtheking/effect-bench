@@ -1,0 +1,13 @@
+{
+  "name": "@effect-bench/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": { "effect-bench": "./src/bin.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@effect-bench/core": "workspace:*",
+    "@effect-bench/node": "workspace:*",
+    "@effect/platform-node": "4.1.2",
+    "effect": "4.1.2"
+  }
+}

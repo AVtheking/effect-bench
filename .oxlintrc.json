@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc"],
+  "categories": { "correctness": "error" },
+  "rules": {
+    "eslint/max-params": ["error", 4],
+    "eslint/no-unused-vars": "off",
+    "eslint/no-var": "error"
+  }
+}

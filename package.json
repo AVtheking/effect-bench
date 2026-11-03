@@ -1,0 +1,23 @@
+{
+  "name": "effect-bench-root",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "check": "pnpm format:fix && pnpm lint && pnpm typecheck && pnpm test",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "lint": "oxlint",
+    "format:fix": "oxfmt --write \"packages/**/*.ts\"",
+    "bench": "node packages/cli/src/bin.ts"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.1.2",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.90.0",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.1"
+  }
+}

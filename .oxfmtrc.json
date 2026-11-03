@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "useTabs": false,
+  "tabWidth": 2,
+  "printWidth": 120,
+  "endOfLine": "lf",
+  "singleQuote": true,
+  "jsxSingleQuote": false,
+  "quoteProps": "as-needed",
+  "trailingComma": "es5",
+  "semi": false,
+  "arrowParens": "avoid",
+  "bracketSameLine": false,
+  "bracketSpacing": true,
+  "singleAttributePerLine": false,
+  "sortImports": {
+    "newlinesBetween": false,
+    "partitionByNewline": true
+  },
+  "ignorePatterns": [
+    "**/debugChatHistory.ts",
+    "**/node_modules",
+    "**/build",
+    "**/dist",
+    "**/.next",
+    "**/repos/**/*",
+    "**/routeTree.gen.ts"
+  ]
+}

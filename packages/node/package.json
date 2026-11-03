@@ -1,0 +1,7 @@
+{
+  "name": "@effect-bench/node",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@effect-bench/core": "workspace:*", "@effect/platform-node": "4.1.2", "effect": "4.1.2" }
+}
