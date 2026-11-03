@@ -10,4 +10,4 @@
 2. `effect-bench run <filter> --save before --json` on the current code.
 3. Make the change.
 4. `effect-bench run <filter> --compare before --json` and read each record's `comparison.verdict`; the final `summary.exitCode` is 1 on a regression.
-5. Treat `inconclusive` or small `slower` changes on `--quick` as noise until confirmed with `--rigorous`.
+5. `inconclusive` means the change is within drift between processes; rerun with `--rigorous` (or more `--forks`) on both sides before concluding anything.

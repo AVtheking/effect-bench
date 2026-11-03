@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-export const schemaVersion = 1
+export const schemaVersion = 2
 
 export const Stats = Schema.Struct({
   samples: Schema.Number,
@@ -69,6 +69,8 @@ export const OkResult = Schema.Struct({
   status: Schema.Literal('ok'),
   ...identity,
   stats: Stats,
+  /** Fresh processes the samples came from; comparisons resample across them. */
+  forks: Schema.Number,
   batchSize: Schema.Number,
   overheadNs: Schema.Number,
   heapDeltaBytes: Schema.NullOr(Schema.Number),
@@ -87,6 +89,23 @@ export const FailedResult = Schema.Struct({
 export type FailedResult = typeof FailedResult.Type
 
 export const BenchResult = Schema.Union([OkResult, FailedResult])
+
+/** One fork's measurement of a bench, before stats and comparisons. */
+export const RawOk = Schema.Struct({
+  status: Schema.Literal('ok'),
+  ...identity,
+  /** Id of the group baseline this bench is reported against. */
+  relativeTo: Schema.NullOr(Schema.String),
+  samplesNs: Schema.Array(Schema.Number),
+  batchSize: Schema.Number,
+  overheadNs: Schema.Number,
+  heapDeltaBytes: Schema.NullOr(Schema.Number),
+  budgetNs: Schema.NullOr(Schema.Struct({ p50: Schema.NullOr(Schema.Number), p99: Schema.NullOr(Schema.Number) })),
+})
+export type RawOk = typeof RawOk.Type
+
+export const RawResult = Schema.Union([RawOk, FailedResult])
+export type RawResult = typeof RawResult.Type
 export type BenchResult = typeof BenchResult.Type
 
 export const Summary = Schema.Struct({
@@ -101,7 +120,8 @@ export type Summary = typeof Summary.Type
 
 export const BaselineEntry = Schema.Struct({
   id: Schema.String,
-  samplesNs: Schema.Array(Schema.Number),
+  /** Samples per fork. */
+  forks: Schema.Array(Schema.Array(Schema.Number)),
   stats: Stats,
 })
 export type BaselineEntry = typeof BaselineEntry.Type

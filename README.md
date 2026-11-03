@@ -25,6 +25,7 @@ effect-bench list
 effect-bench run --save before          # store a baseline
 effect-bench run --compare before --json
 effect-bench check --compare before     # exit 1 on a regression or blown budget
+effect-bench run --rigorous --forks 8   # more processes for a tighter interval
 ```
 
 ## Writing benches
@@ -50,7 +51,13 @@ Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap de
 {"type":"summary","schemaVersion":1,"total":4,"failed":0,"regressions":1,"budgetsExceeded":0,"stale":0,"exitCode":1}
 ```
 
-Verdicts come from a bootstrap 95% confidence interval on the change in median: `faster`/`slower` only when the whole interval is beyond the noise threshold (`--threshold`, default 3%), `same` when it is inside, `inconclusive` otherwise.
+## How verdicts work
+
+The CLI measures each suite in several fresh processes (`--forks`, default 3; 6 with `--rigorous`), interleaved fork by fork so slow drift spreads across suites. Drift between processes — JIT decisions, CPU frequency — is much larger than noise within one run, so each fork's median counts as one observation: the 95% interval for the change is a pooled t-interval on log medians.
+
+`faster`/`slower` only when the whole interval is beyond the noise threshold (`--threshold`, default 3%), `same` when it is inside, `inconclusive` otherwise. On a laptop with 3 forks per side, repeated comparisons of unchanged code gave no false verdicts in 96 tries; a 15% slowdown was flagged every time and a 5% one most of the time (otherwise `inconclusive`). Treat `inconclusive` as "measure more": `--rigorous` or more `--forks`.
+
+`--forks 0` measures in the CLI process, and `Runner.run` does the same when called from code. With a single fork on both sides the interval only sees within-run noise and will overstate confidence.
 
 Exit codes: `0` ok, `1` regression or blown budget, `2` failed bench or error, `3` baseline recorded on another runtime or machine.
 
@@ -63,7 +70,7 @@ import { BenchConfig } from '@effect-bench/cli'
 
 export default BenchConfig.make({
   include: ['**/bench/*.bench.ts'],
-  modes: { ci: { samples: 50, minTime: '1 second' } },
+  modes: { ci: { samples: 50, minTime: '1 second', forks: 5 } },
   noiseThreshold: 0.05,
 })
 ```
@@ -76,5 +83,4 @@ export default BenchConfig.make({
 
 ## Known limitations
 
-- Verdicts only see noise within one run. Re-running unchanged code can show a few percent of drift (JIT state, CPU frequency) that the interval does not cover, so a `slower` verdict under ~5–10% on `--quick` is not trustworthy yet. Running each suite in several fresh processes is the planned fix.
 - Bench files are loaded with Node's built-in type stripping, so they must use erasable TypeScript syntax only.

@@ -2,29 +2,37 @@ import { Cause, type Context, Data, Duration, Effect, Exit, Layer, Option, type 
 import { type Bench, benchId, type Options, type Suite } from './Bench.ts'
 import type {
   Baseline,
+  BaselineEntry,
   BenchResult,
   BudgetCheck,
-  Comparison,
   Environment,
   FailedResult,
   OkResult,
+  RawOk,
+  RawResult,
+  Stats,
   Summary,
 } from './BenchResult.ts'
 import { schemaVersion } from './BenchResult.ts'
 import { compare } from './Compare.ts'
 import { measure } from './Measure.ts'
 import { BaselineError, BaselineStore, BenchEnvironment, BenchReporter } from './Services.ts'
-import { compute, formatNs } from './Stats.ts'
+import { compute, formatNs, median } from './Stats.ts'
 
-export interface RunOptions {
-  /** Only run benches whose id contains this text. */
+export interface MeasureOptions {
+  /** Only run benches whose id contains this text, or that carry this tag. */
   readonly filter?: string | undefined
   /** Overrides the library defaults; suite and bench options still win. */
   readonly mode?: Options | undefined
+}
+
+export interface FinishOptions {
   readonly compare?: string | undefined
   readonly save?: string | undefined
   readonly noiseThreshold?: number | undefined
 }
+
+export interface RunOptions extends MeasureOptions, FinishOptions {}
 
 export interface PlannedBench {
   readonly id: string
@@ -47,6 +55,8 @@ class BenchFailure extends Data.TaggedError('BenchFailure')<{
   readonly message: string
 }> {}
 
+const toNs = (input: Duration.Input) => Number(Duration.toNanosUnsafe(input))
+
 const failWith = (phase: FailedResult['phase']) => (cause: Cause.Cause<unknown>) =>
   new BenchFailure({ phase, message: Cause.pretty(cause) })
 
@@ -67,15 +77,13 @@ export const list = (suites: ReadonlyArray<Suite>, filter?: string): ReadonlyArr
     suite.benches.map(bench => plannedOf(suite, bench, undefined)).filter(planned => matches(planned, filter))
   )
 
-const toNs = (input: Duration.Input) => Number(Duration.toNanosUnsafe(input))
-
-const checkBudget = (options: Options, stats: OkResult['stats']): BudgetCheck | null => {
-  if (options.budget === undefined) return null
+const checkBudget = (budgetNs: RawOk['budgetNs'], stats: Stats): BudgetCheck | null => {
+  if (budgetNs === null) return null
   const violations = (['p50', 'p99'] as const).flatMap(key => {
-    const limit = options.budget?.[key]
-    if (limit === undefined) return []
+    const limit = budgetNs[key]
+    if (limit === null) return []
     const actual = key === 'p50' ? stats.medianNs : stats.p99Ns
-    return actual > toNs(limit) ? [`${key} ${formatNs(actual)} > ${formatNs(toNs(limit))}`] : []
+    return actual > limit ? [`${key} ${formatNs(actual)} > ${formatNs(limit)}`] : []
   })
   return { status: violations.length === 0 ? 'ok' : 'exceeded', violations }
 }
@@ -87,21 +95,11 @@ const isStale = (current: Environment, recorded: Environment) =>
   current.arch !== recorded.arch ||
   current.cpu !== recorded.cpu
 
-interface Measured {
-  readonly result: BenchResult
-  readonly samplesNs: ReadonlyArray<number>
-}
-
 const runBench = Effect.fn('effectBench/runBench')(function* (
   bench: Bench,
   planned: PlannedBench,
   ctx: unknown,
-  settings: {
-    readonly options: Options
-    readonly baseline: Baseline | undefined
-    readonly stale: boolean
-    readonly noiseThreshold: number
-  }
+  options: Options
 ) {
   const operation = yield* bench.prepare(ctx).pipe(Effect.catchCause(cause => Effect.fail(failWith('prepare')(cause))))
 
@@ -115,40 +113,33 @@ const runBench = Effect.fn('effectBench/runBench')(function* (
     }
   }
 
-  const options = settings.options
   const measurement = yield* measure(operation, {
     samples: options.samples ?? defaults.samples,
     minTimeNs: toNs(options.minTime ?? defaults.minTime),
     warmupNs: toNs(options.warmup ?? defaults.warmup),
     memory: options.memory ?? defaults.memory,
   })
-  const stats = compute(measurement.samplesNs)
 
-  const entry = settings.baseline?.entries.find(candidate => candidate.id === planned.id)
-  const comparison: Comparison | null =
-    entry === undefined || settings.baseline === undefined
-      ? null
-      : {
-          baseline: settings.baseline.name,
-          baselineMedianNs: entry.stats.medianNs,
-          stale: settings.stale,
-          ...compare(measurement.samplesNs, entry.samplesNs, { noiseThreshold: settings.noiseThreshold }),
-        }
-
+  const { budget } = options
   return {
-    result: {
-      status: 'ok',
-      ...planned,
-      stats,
-      batchSize: measurement.batchSize,
-      overheadNs: measurement.overheadNs,
-      heapDeltaBytes: measurement.heapDeltaBytes,
-      budget: checkBudget(options, stats),
-      comparison,
-      relative: null,
-    },
+    status: 'ok',
+    ...planned,
+    relativeTo:
+      bench.group === undefined
+        ? null
+        : benchId(planned.suite, { name: bench.group.baseline, params: bench.params, group: bench.group }),
     samplesNs: measurement.samplesNs,
-  } satisfies Measured
+    batchSize: measurement.batchSize,
+    overheadNs: measurement.overheadNs,
+    heapDeltaBytes: measurement.heapDeltaBytes,
+    budgetNs:
+      budget === undefined
+        ? null
+        : {
+            p50: budget.p50 === undefined ? null : toNs(budget.p50),
+            p99: budget.p99 === undefined ? null : toNs(budget.p99),
+          },
+  } satisfies RawOk
 })
 
 const failureOf = (cause: Cause.Cause<unknown>): BenchFailure => {
@@ -156,27 +147,11 @@ const failureOf = (cause: Cause.Cause<unknown>): BenchFailure => {
   return error instanceof BenchFailure ? error : failWith('run')(cause)
 }
 
-const withRelative = (measured: ReadonlyArray<Measured>, benches: ReadonlyArray<Bench>): ReadonlyArray<Measured> =>
-  measured.map((item, index) => {
-    const group = benches[index]?.group
-    if (item.result.status !== 'ok' || group === undefined) return item
-    const reference = measured.find(
-      (candidate, candidateIndex) =>
-        benches[candidateIndex]?.group?.name === group.name && benches[candidateIndex]?.name === group.baseline
-    )?.result
-    if (reference?.status !== 'ok' || reference.stats.medianNs === 0) return item
-    return {
-      ...item,
-      result: {
-        ...item.result,
-        relative: { baselineId: reference.id, ratio: item.result.stats.medianNs / reference.stats.medianNs },
-      },
-    }
-  })
-
-const failed = (planned: PlannedBench, failure: BenchFailure): Measured => ({
-  result: { status: 'failed', ...planned, phase: failure.phase, message: failure.message },
-  samplesNs: [],
+export const failed = (planned: PlannedBench, phase: FailedResult['phase'], message: string): FailedResult => ({
+  status: 'failed',
+  ...planned,
+  phase,
+  message,
 })
 
 /** `suite` already checked that the layer covers what setup and benches need; the erased types only see `any`. */
@@ -186,7 +161,7 @@ const provideSuite = <A, E>(effect: Effect.Effect<A, E, any>, context: Context.C
 const runSuite = Effect.fn('effectBench/runSuite')(function* (
   suite: Suite,
   benches: ReadonlyArray<{ readonly bench: Bench; readonly planned: PlannedBench }>,
-  settings: Omit<Parameters<typeof runBench>[3], 'options'> & { readonly mode: Options | undefined }
+  mode: Options | undefined
 ) {
   const setup = yield* Effect.exit(
     Effect.gen(function* () {
@@ -196,25 +171,94 @@ const runSuite = Effect.fn('effectBench/runSuite')(function* (
     })
   )
   if (Exit.isFailure(setup)) {
-    const failure = failWith('setup')(setup.cause)
-    return benches.map(({ planned }) => failed(planned, failure))
+    const message = Cause.pretty(setup.cause)
+    return benches.map(({ planned }) => failed(planned, 'setup', message))
   }
 
-  const measured: Array<Measured> = []
+  const results: Array<RawResult> = []
   for (const { bench, planned } of benches) {
+    const options = { ...defaults, ...mode, ...suite.options, ...bench.options }
     const exit = yield* Effect.exit(
-      runBench(bench, planned, setup.value.ctx, {
-        ...settings,
-        options: { ...defaults, ...settings.mode, ...suite.options, ...bench.options },
-      }).pipe(effect => provideSuite(effect, setup.value.context))
+      provideSuite(runBench(bench, planned, setup.value.ctx, options), setup.value.context)
     )
-    measured.push(Exit.isSuccess(exit) ? exit.value : failed(planned, failureOf(exit.cause)))
+    if (Exit.isSuccess(exit)) results.push(exit.value)
+    else {
+      const failure = failureOf(exit.cause)
+      results.push(failed(planned, failure.phase, failure.message))
+    }
   }
-  return withRelative(
-    measured,
-    benches.map(({ bench }) => bench)
-  )
+  return results
 }, Effect.scoped)
+
+export const plan = (suites: ReadonlyArray<Suite>, options: MeasureOptions = {}) =>
+  suites.flatMap(suite => {
+    const benches = suite.benches
+      .map(bench => ({ bench, planned: plannedOf(suite, bench, options.mode) }))
+      .filter(({ planned }) => matches(planned, options.filter))
+    return benches.length === 0 ? [] : [{ suite, benches }]
+  })
+
+/** Measures every matching bench once, in this process. */
+export const measureSuites = Effect.fn('effectBench/measureSuites')(function* (
+  suites: ReadonlyArray<Suite>,
+  options: MeasureOptions = {}
+) {
+  const results: Array<RawResult> = []
+  for (const { suite, benches } of plan(suites, options))
+    results.push(...(yield* runSuite(suite, benches, options.mode)))
+  return results
+})
+
+const merge = (
+  runs: ReadonlyArray<RawResult>,
+  baseline: Baseline | undefined,
+  settings: { readonly stale: boolean; readonly noiseThreshold: number }
+): { readonly result: BenchResult; readonly entry: BaselineEntry | undefined } => {
+  const failure = runs.find(run => run.status === 'failed')
+  if (failure !== undefined) return { result: failure, entry: undefined }
+  const oks = runs as ReadonlyArray<RawOk>
+  const first = oks[0]!
+  const forks = oks.map(run => run.samplesNs)
+  const stats = compute(forks.flat())
+  const heap = oks.flatMap(run => (run.heapDeltaBytes === null ? [] : [run.heapDeltaBytes]))
+  const recorded = baseline?.entries.find(entry => entry.id === first.id)
+  const { relativeTo, samplesNs, budgetNs, ...identity } = first
+
+  return {
+    result: {
+      ...identity,
+      stats,
+      forks: forks.length,
+      batchSize: median(oks.map(run => run.batchSize)),
+      overheadNs: median(oks.map(run => run.overheadNs)),
+      heapDeltaBytes: heap.length === 0 ? null : median(heap),
+      budget: checkBudget(budgetNs, stats),
+      comparison:
+        recorded === undefined || baseline === undefined
+          ? null
+          : {
+              baseline: baseline.name,
+              baselineMedianNs: recorded.stats.medianNs,
+              stale: settings.stale,
+              ...compare(forks, recorded.forks, { noiseThreshold: settings.noiseThreshold }),
+            },
+      relative: null,
+    },
+    entry: { id: first.id, forks, stats },
+  }
+}
+
+const withRelative = (results: ReadonlyArray<BenchResult>, raws: ReadonlyArray<RawResult>) =>
+  results.map((result, index) => {
+    const raw = raws[index]
+    if (result.status !== 'ok' || raw?.status !== 'ok' || raw.relativeTo === null) return result
+    const reference = results.find(candidate => candidate.id === raw.relativeTo)
+    if (reference?.status !== 'ok' || reference.stats.medianNs === 0) return result
+    return {
+      ...result,
+      relative: { baselineId: reference.id, ratio: result.stats.medianNs / reference.stats.medianNs },
+    }
+  })
 
 export const summarize = (results: ReadonlyArray<BenchResult>): Summary => {
   const ok = results.filter(result => result.status === 'ok')
@@ -232,7 +276,11 @@ export const summarize = (results: ReadonlyArray<BenchResult>): Summary => {
   }
 }
 
-export const run = Effect.fn('effectBench/run')(function* (suites: ReadonlyArray<Suite>, options: RunOptions = {}) {
+/** Merges per-fork measurements, compares against a baseline, reports and optionally saves. */
+export const finish = Effect.fn('effectBench/finish')(function* (
+  forks: ReadonlyArray<ReadonlyArray<RawResult>>,
+  options: FinishOptions = {}
+) {
   const reporter = yield* BenchReporter
   const store = yield* BaselineStore
   const environment = yield* (yield* BenchEnvironment).fingerprint
@@ -242,24 +290,20 @@ export const run = Effect.fn('effectBench/run')(function* (suites: ReadonlyArray
       ? undefined
       : (Option.getOrUndefined(yield* store.load(options.compare)) ??
         (yield* new BaselineError({ name: options.compare, message: `Baseline "${options.compare}" not found.` })))
-
   const settings = {
-    baseline,
     stale: baseline !== undefined && isStale(environment, baseline.environment),
     noiseThreshold: options.noiseThreshold ?? 0.03,
-    mode: options.mode,
   }
 
-  const measured: Array<Measured> = []
-  for (const suite of suites) {
-    const benches = suite.benches
-      .map(bench => ({ bench, planned: plannedOf(suite, bench, options.mode) }))
-      .filter(({ planned }) => matches(planned, options.filter))
-    if (benches.length === 0) continue
-    const suiteResults = yield* runSuite(suite, benches, settings)
-    for (const item of suiteResults) yield* reporter.onResult(item.result)
-    measured.push(...suiteResults)
-  }
+  const byId = new Map<string, Array<RawResult>>()
+  for (const fork of forks) for (const raw of fork) byId.set(raw.id, [...(byId.get(raw.id) ?? []), raw])
+  const raws = [...byId.values()].map(runs => runs[0]!)
+  const merged = [...byId.values()].map(runs => merge(runs, baseline, settings))
+  const results = withRelative(
+    merged.map(({ result }) => result),
+    raws
+  )
+  for (const result of results) yield* reporter.onResult(result)
 
   if (options.save !== undefined) {
     yield* store.save({
@@ -267,14 +311,15 @@ export const run = Effect.fn('effectBench/run')(function* (suites: ReadonlyArray
       name: options.save,
       createdAt: new Date().toISOString(),
       environment,
-      entries: measured.flatMap(({ result, samplesNs }) =>
-        result.status === 'ok' ? [{ id: result.id, samplesNs, stats: result.stats }] : []
-      ),
+      entries: merged.flatMap(({ entry }) => (entry === undefined ? [] : [entry])),
     })
   }
 
-  const results = measured.map(({ result }) => result)
   const summary = summarize(results)
   yield* reporter.onEnd(summary, results)
   return { results, summary } satisfies RunReport
 })
+
+/** Measures in this process (one fork) and finishes. Use the CLI for fresh-process forks. */
+export const run = (suites: ReadonlyArray<Suite>, options: RunOptions = {}) =>
+  Effect.flatMap(measureSuites(suites, options), raws => finish([raws], options))

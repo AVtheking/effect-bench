@@ -1,9 +1,10 @@
-import { Reporter, Runner } from '@effect-bench/core'
+import { type RawResult, Reporter, Runner } from '@effect-bench/core'
 import { NodeBench } from '@effect-bench/node'
 import { Console, Effect, Layer, Option } from 'effect'
 import { Argument, Command, Flag } from 'effect/cli'
 import { type Config, defaultModes, defaults } from './Config.ts'
 import { discover, loadConfig } from './Discover.ts'
+import { measureInChild, recordPrefix } from './Fork.ts'
 
 const filter = Argument.String('filter').pipe(
   Argument.withDescription('Only benches whose id contains this text, or that carry this tag'),
@@ -21,6 +22,10 @@ const mode = Flag.String('mode').pipe(
 )
 const quick = Flag.Boolean('quick').pipe(Flag.withDescription('Same as --mode quick'), Flag.withDefault(false))
 const rigorous = Flag.Boolean('rigorous').pipe(Flag.withDescription('Same as --mode rigorous'), Flag.withDefault(false))
+const forks = Flag.Int('forks').pipe(
+  Flag.withDescription('Fresh processes per suite (default 3); 0 measures in this process'),
+  Flag.optional
+)
 const threshold = Flag.Finite('threshold').pipe(
   Flag.withDescription('Relative change treated as noise (default 0.03)'),
   Flag.optional
@@ -37,6 +42,17 @@ const platformLayer = (config: Config) => {
   return config.layer === undefined ? node : Layer.merge(node, config.layer)
 }
 
+const resolveMode = (config: Config, name: string | undefined) =>
+  Effect.gen(function* () {
+    const modes = { ...defaultModes, ...config.modes }
+    if (name === undefined) return undefined
+    const mode = modes[name]
+    if (mode === undefined) {
+      return yield* Effect.fail(`Unknown mode "${name}". Known modes: ${Object.keys(modes).join(', ')}`)
+    }
+    return mode
+  })
+
 const runBenches = (options: {
   readonly filter: Option.Option<string>
   readonly json: boolean
@@ -45,19 +61,37 @@ const runBenches = (options: {
   readonly mode: Option.Option<string>
   readonly quick: boolean
   readonly rigorous: boolean
+  readonly forks: Option.Option<number>
   readonly threshold: Option.Option<number>
 }) =>
   Effect.gen(function* () {
     const { config, suites } = yield* load
-    const modes = { ...defaultModes, ...config.modes }
     const modeName = options.quick ? 'quick' : options.rigorous ? 'rigorous' : Option.getOrUndefined(options.mode)
-    if (modeName !== undefined && modes[modeName] === undefined) {
-      return yield* Effect.fail(`Unknown mode "${modeName}". Known modes: ${Object.keys(modes).join(', ')}`)
+    const mode = yield* resolveMode(config, modeName)
+    const filter = Option.getOrUndefined(options.filter)
+    const forkCount = Option.getOrElse(options.forks, () => mode?.forks ?? defaults.forks)
+
+    const plan = Runner.plan(suites, { filter, mode })
+    const forksRaw: Array<ReadonlyArray<RawResult>> = []
+    if (forkCount === 0) {
+      forksRaw.push(yield* Runner.measureSuites(suites, { filter, mode }).pipe(Effect.provide(platformLayer(config))))
+    }
+    // Fork-major order spreads slow drift (thermal, background load) across every suite instead of one.
+    for (let fork = 1; fork <= forkCount; fork++) {
+      const raws: Array<RawResult> = []
+      for (const { suite, benches } of plan) {
+        yield* Console.error(`fork ${fork}/${forkCount}  ${suite.name}`)
+        raws.push(
+          ...(yield* measureInChild(
+            benches.map(({ planned }) => planned),
+            { suite: suite.name, filter, mode: modeName }
+          ))
+        )
+      }
+      forksRaw.push(raws)
     }
 
-    const { summary } = yield* Runner.run(suites, {
-      filter: Option.getOrUndefined(options.filter),
-      mode: modeName === undefined ? undefined : modes[modeName],
+    const { summary } = yield* Runner.finish(forksRaw, {
       save: Option.getOrUndefined(options.save),
       compare: Option.getOrUndefined(options.compare),
       noiseThreshold: Option.getOrElse(options.threshold, () => config.noiseThreshold ?? defaults.noiseThreshold),
@@ -65,7 +99,19 @@ const runBenches = (options: {
     process.exitCode = summary.exitCode
   })
 
-const runConfig = { filter, json, save, compare, mode, quick, rigorous, threshold }
+const measureCommand = Command.make('measure', { filter, mode, suite: Flag.String('suite') }, options =>
+  Effect.gen(function* () {
+    const { config, suites } = yield* load
+    const mode = yield* resolveMode(config, Option.getOrUndefined(options.mode))
+    const raws = yield* Runner.measureSuites(
+      suites.filter(suite => suite.name === options.suite),
+      { filter: Option.getOrUndefined(options.filter), mode }
+    ).pipe(Effect.provide(platformLayer(config)))
+    for (const raw of raws) yield* Console.log(`${recordPrefix}${JSON.stringify(raw)}`)
+  })
+).pipe(Command.withDescription('Internal: measure one suite in this process and print raw records'))
+
+const runConfig = { filter, json, save, compare, mode, quick, rigorous, forks, threshold }
 
 const run = Command.make('run', runConfig, runBenches).pipe(
   Command.withDescription('Run benches, optionally saving or comparing a baseline')
@@ -87,7 +133,7 @@ const list = Command.make('list', { filter, json }, options =>
 
 export const command = Command.make('effect-bench').pipe(
   Command.withDescription('Benchmarks for Effect code'),
-  Command.withSubcommands([run, check, list])
+  Command.withSubcommands([run, check, list, measureCommand])
 )
 
 export const main = Command.run(command, { version: '0.0.0' })

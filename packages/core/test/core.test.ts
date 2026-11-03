@@ -25,19 +25,33 @@ describe('Compare', () => {
   const base = Array.from({ length: 50 }, (_, i) => 100 + (i % 5))
 
   it('calls identical distributions the same', () => {
-    assert.strictEqual(Compare.compare(base, base, { noiseThreshold: 0.03 }).verdict, 'same')
+    assert.strictEqual(Compare.compare([base], [base], { noiseThreshold: 0.03 }).verdict, 'same')
   })
 
   it('detects a slowdown', () => {
     const slower = base.map(value => value * 1.2)
-    const change = Compare.compare(slower, base, { noiseThreshold: 0.03 })
+    const change = Compare.compare([slower], [base], { noiseThreshold: 0.03 })
     assert.strictEqual(change.verdict, 'slower')
     assert.closeTo(change.change, 0.2, 0.01)
   })
 
+  it('treats drift between forks as noise', () => {
+    const drifted = [base.map(value => value * 0.96), base.map(value => value * 1.06), base]
+    const change = Compare.compare([base.map(value => value * 1.05)], drifted, { noiseThreshold: 0.03 })
+    assert.strictEqual(change.verdict, 'inconclusive')
+    const singleFork = Compare.compare([base.map(value => value * 1.05)], [base], { noiseThreshold: 0.03 })
+    assert.strictEqual(singleFork.verdict, 'slower')
+  })
+
+  it('detects a change larger than the drift between forks', () => {
+    const forks = [0.99, 1.01, 1.0].map(factor => base.map(value => value * factor))
+    const slower = forks.map(fork => fork.map(value => value * 1.15))
+    assert.strictEqual(Compare.compare(slower, forks, { noiseThreshold: 0.03 }).verdict, 'slower')
+  })
+
   it('detects a speedup', () => {
     const faster = base.map(value => value * 0.8)
-    assert.strictEqual(Compare.compare(faster, base, { noiseThreshold: 0.03 }).verdict, 'faster')
+    assert.strictEqual(Compare.compare([faster], [base], { noiseThreshold: 0.03 }).verdict, 'faster')
   })
 })
 
