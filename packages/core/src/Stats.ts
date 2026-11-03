@@ -36,7 +36,7 @@ export const compute = (samplesNs: ReadonlyArray<number>): StatsType => {
     maxNs: kept[n - 1] ?? Number.NaN,
     madNs: median(kept.map(value => Math.abs(value - medianNs))),
     rme: mean === 0 ? 0 : ((1.96 * Math.sqrt(variance)) / Math.sqrt(n) / mean) * 100,
-    opsPerSec: medianNs > 0 ? 1e9 / medianNs : Number.POSITIVE_INFINITY,
+    opsPerSec: medianNs > 0 ? 1e9 / medianNs : null,
   }
 }
 

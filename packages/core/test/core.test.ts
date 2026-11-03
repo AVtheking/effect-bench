@@ -12,6 +12,7 @@ describe('Stats', () => {
     assert.strictEqual(stats.outliers, 1)
     assert.strictEqual(stats.medianNs, 12)
     assert.strictEqual(stats.opsPerSec, 1e9 / 12)
+    assert.isNull(Stats.compute([0, 0, 0]).opsPerSec)
   })
 
   it('formats nanoseconds', () => {

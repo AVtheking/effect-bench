@@ -13,7 +13,8 @@ export const Stats = Schema.Struct({
   maxNs: Schema.Number,
   madNs: Schema.Number,
   rme: Schema.Number,
-  opsPerSec: Schema.Number,
+  /** Null when the median is below what the clock can resolve. */
+  opsPerSec: Schema.NullOr(Schema.Number),
 })
 export type Stats = typeof Stats.Type
 

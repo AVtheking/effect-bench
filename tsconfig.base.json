@@ -2,8 +2,8 @@
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "target": "ES2023",
-    "lib": ["ES2023"],
+    "target": "ES2024",
+    "lib": ["ESNext"],
     "types": ["node"],
     "strict": true,
     "exactOptionalPropertyTypes": true,

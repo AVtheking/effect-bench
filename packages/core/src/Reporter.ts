@@ -18,7 +18,7 @@ const row = (result: BenchResult): ReadonlyArray<string> => {
     formatNs(stats.medianNs),
     formatNs(stats.p99Ns),
     `±${stats.rme.toFixed(1)}%`,
-    stats.opsPerSec.toLocaleString('en-US', { maximumFractionDigits: 0 }),
+    stats.opsPerSec?.toLocaleString('en-US', { maximumFractionDigits: 0 }) ?? '—',
     comparison === null
       ? relative === null || relative.ratio === 1
         ? ''

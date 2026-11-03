@@ -1,4 +1,4 @@
-import { Cause, Data, Duration, Effect, Exit, Layer, Option } from 'effect'
+import { Cause, type Context, Data, Duration, Effect, Exit, Layer, Option, type Scope } from 'effect'
 import { type Bench, benchId, type Options, type Suite } from './Bench.ts'
 import type {
   Baseline,
@@ -164,7 +164,7 @@ const withRelative = (measured: ReadonlyArray<Measured>, benches: ReadonlyArray<
       (candidate, candidateIndex) =>
         benches[candidateIndex]?.group?.name === group.name && benches[candidateIndex]?.name === group.baseline
     )?.result
-    if (reference?.status !== 'ok') return item
+    if (reference?.status !== 'ok' || reference.stats.medianNs === 0) return item
     return {
       ...item,
       result: {
@@ -179,6 +179,10 @@ const failed = (planned: PlannedBench, failure: BenchFailure): Measured => ({
   samplesNs: [],
 })
 
+/** `suite` already checked that the layer covers what setup and benches need; the erased types only see `any`. */
+const provideSuite = <A, E>(effect: Effect.Effect<A, E, any>, context: Context.Context<never>) =>
+  Effect.provideContext(effect, context) as Effect.Effect<A, E, Scope.Scope>
+
 const runSuite = Effect.fn('effectBench/runSuite')(function* (
   suite: Suite,
   benches: ReadonlyArray<{ readonly bench: Bench; readonly planned: PlannedBench }>,
@@ -187,7 +191,7 @@ const runSuite = Effect.fn('effectBench/runSuite')(function* (
   const setup = yield* Effect.exit(
     Effect.gen(function* () {
       const context = yield* Layer.build(suite.layer)
-      const ctx = yield* Effect.provideContext(suite.setup, context)
+      const ctx = yield* provideSuite(suite.setup, context)
       return { context, ctx }
     })
   )
@@ -202,7 +206,7 @@ const runSuite = Effect.fn('effectBench/runSuite')(function* (
       runBench(bench, planned, setup.value.ctx, {
         ...settings,
         options: { ...defaults, ...settings.mode, ...suite.options, ...bench.options },
-      }).pipe(Effect.provideContext(setup.value.context))
+      }).pipe(effect => provideSuite(effect, setup.value.context))
     )
     measured.push(Exit.isSuccess(exit) ? exit.value : failed(planned, failureOf(exit.cause)))
   }

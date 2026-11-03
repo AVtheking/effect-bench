@@ -76,6 +76,9 @@ const makeBench = <Ctx, R>(
   params: Params = {}
 ): Bench<Ctx, R> => ({ _tag: 'Bench', name, params, group: undefined, options, check, prepare })
 
+/**
+ * An Effect value is re-run as is; a function is called for every operation, so building the Effect is measured too.
+ */
 export const make = <Ctx = unknown, A = unknown, E = never, R = never>(
   name: string,
   run: Effect.Effect<A, E, R> | ((ctx: Ctx) => Effect.Effect<A, E, R>),
@@ -86,7 +89,7 @@ export const make = <Ctx = unknown, A = unknown, E = never, R = never>(
     ctx =>
       Effect.map(Effect.context<R>(), context => ({
         _tag: 'Effect' as const,
-        run: Effect.provideContext(Effect.isEffect(run) ? run : run(ctx), context),
+        run: Effect.provideContext(Effect.isEffect(run) ? run : Effect.suspend(() => run(ctx)), context),
       })),
     options
   )
