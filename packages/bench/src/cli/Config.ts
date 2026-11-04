@@ -1,5 +1,5 @@
-import type { Bench } from '@avtheking/bench-core'
 import type { Layer } from 'effect'
+import type { Bench } from '../index.ts'
 
 export interface Config {
   /** Globs relative to the working directory. */

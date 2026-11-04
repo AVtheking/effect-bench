@@ -1,6 +1,15 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": { "rootDir": ".", "outDir": "dist" },
-  "references": [{ "path": "../packages/core" }],
-  "include": ["bench"]
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "references": [
+    {
+      "path": "../packages/bench"
+    }
+  ],
+  "include": [
+    "bench"
+  ]
 }

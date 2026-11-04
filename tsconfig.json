@@ -2,13 +2,7 @@
   "files": [],
   "references": [
     {
-      "path": "packages/core"
-    },
-    {
-      "path": "packages/node"
-    },
-    {
-      "path": "packages/cli"
+      "path": "packages/bench"
     },
     {
       "path": "examples"

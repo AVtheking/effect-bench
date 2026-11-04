@@ -2,16 +2,9 @@ import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
-import {
-  Baseline,
-  BaselineError,
-  BaselineStore,
-  BenchClock,
-  BenchEnvironment,
-  BenchMemory,
-} from '@avtheking/bench-core'
 import { NodeServices } from '@effect/platform-node'
 import { Effect, FileSystem, Layer, Option, Path, Schema } from 'effect'
+import { Baseline, BaselineError, BaselineStore, BenchClock, BenchEnvironment, BenchMemory } from '../index.ts'
 
 export const clock = Layer.sync(BenchClock, () => {
   // Offset from layer creation so the value stays well inside float precision.

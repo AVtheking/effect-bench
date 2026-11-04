@@ -1,4 +1,4 @@
-import { Bench } from '@avtheking/bench-core'
+import { Bench } from '@avtheking/bench'
 import { Effect, Schema } from 'effect'
 
 const Lead = Schema.Struct({
