@@ -1,5 +1,5 @@
-import { type RawResult, Reporter, Runner } from '@effect-bench/core'
-import { NodeBench } from '@effect-bench/node'
+import { type RawResult, Reporter, Runner } from '@avtheking/bench-core'
+import { NodeBench } from '@avtheking/bench-node'
 import { Console, Effect, Layer, Option } from 'effect'
 import { Argument, Command, Flag } from 'effect/cli'
 import { type Config, defaultModes, defaults } from './Config.ts'

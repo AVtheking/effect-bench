@@ -1,12 +1,12 @@
 {
-  "name": "@effect-bench/node",
+  "name": "@avtheking/bench-node",
   "version": "0.0.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@effect-bench/core": "workspace:*"
+    "@avtheking/bench-core": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^4.1.2",

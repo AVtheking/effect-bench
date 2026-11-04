@@ -1,4 +1,4 @@
-import type { Bench } from '@effect-bench/core'
+import type { Bench } from '@avtheking/bench-core'
 import type { Layer } from 'effect'
 
 export interface Config {

@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Bench, BenchEnvironment, BenchMemory, Runner } from '@effect-bench/core'
+import { Bench, BenchEnvironment, BenchMemory, Runner } from '@avtheking/bench-core'
 import { assert, describe, it } from '@effect/vitest'
 import { Effect } from 'effect'
 import { NodeBench } from '../src/index.ts'

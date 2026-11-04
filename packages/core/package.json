@@ -1,5 +1,5 @@
 {
-  "name": "@effect-bench/core",
+  "name": "@avtheking/bench-core",
   "version": "0.0.0",
   "type": "module",
   "exports": {

@@ -1,5 +1,5 @@
 {
-  "name": "@effect-bench/cli",
+  "name": "@avtheking/bench-cli",
   "version": "0.0.0",
   "type": "module",
   "bin": {
@@ -9,8 +9,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@effect-bench/core": "workspace:*",
-    "@effect-bench/node": "workspace:*"
+    "@avtheking/bench-core": "workspace:*",
+    "@avtheking/bench-node": "workspace:*"
   },
   "peerDependencies": {
     "effect": "^4.1.2",
