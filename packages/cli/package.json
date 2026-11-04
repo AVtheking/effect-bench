@@ -1,0 +1,39 @@
+{
+  "name": "@avtheking/bench-cli",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "effect-bench": "./src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@avtheking/bench-core": "workspace:*",
+    "@avtheking/bench-node": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "^4.1.2",
+    "@effect/platform-node": "^4.1.2"
+  },
+  "devDependencies": {
+    "effect": "4.1.2",
+    "@effect/platform-node": "4.1.2"
+  },
+  "files": [
+    "dist/src",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/src/index.d.ts",
+        "default": "./dist/src/index.js"
+      }
+    },
+    "bin": {
+      "effect-bench": "./dist/src/bin.js"
+    }
+  }
+}

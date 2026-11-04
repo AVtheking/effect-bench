@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { RawResult, Runner } from '@avtheking/bench-core'
 import { Console, Effect, Schema } from 'effect'
-import { RawResult, Runner } from '../index.ts'
 
 /** Marks result lines so stray console output from bench code is ignored. */
 export const recordPrefix = '@@effect-bench '

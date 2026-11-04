@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { glob } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import type { Bench } from '@avtheking/bench-core'
 import { Data, Effect } from 'effect'
-import type { Bench } from '../index.ts'
 import { type Config, defaults } from './Config.ts'
 
 export class DiscoveryError extends Data.TaggedError('DiscoveryError')<{

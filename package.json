@@ -12,8 +12,8 @@
     "test": "vitest run",
     "lint": "oxlint",
     "format:fix": "oxfmt --write \"packages/**/*.ts\"",
-    "bench": "node packages/bench/src/cli/bin.ts",
-    "build": "rm -rf packages/bench/dist && tsc -b",
+    "bench": "node packages/cli/src/bin.ts",
+    "build": "rm -rf packages/*/dist && tsc -b",
     "release": "pnpm check && pnpm build && pnpm -r publish"
   },
   "devDependencies": {

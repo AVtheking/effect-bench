@@ -130,14 +130,43 @@ importers:
 
   examples:
     dependencies:
-      '@avtheking/bench':
+      '@avtheking/bench-cli':
         specifier: workspace:*
-        version: link:../packages/bench
+        version: link:../packages/cli
+      '@avtheking/bench-core':
+        specifier: workspace:*
+        version: link:../packages/core
       effect:
         specifier: 4.1.2
         version: 4.1.2
 
-  packages/bench:
+  packages/cli:
+    dependencies:
+      '@avtheking/bench-core':
+        specifier: workspace:*
+        version: link:../core
+      '@avtheking/bench-node':
+        specifier: workspace:*
+        version: link:../node
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(redis@6.3.1)
+      effect:
+        specifier: 4.1.2
+        version: 4.1.2
+
+  packages/core:
+    devDependencies:
+      effect:
+        specifier: 4.1.2
+        version: 4.1.2
+
+  packages/node:
+    dependencies:
+      '@avtheking/bench-core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@effect/platform-node':
         specifier: 4.1.2

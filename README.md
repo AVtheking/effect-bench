@@ -4,7 +4,7 @@ Benchmarks for [Effect](https://effect.website) code, with JSON output and basel
 
 ```ts
 // bench/schema.bench.ts
-import { Bench } from '@avtheking/bench'
+import { Bench } from '@avtheking/bench-core'
 import { Effect } from 'effect'
 
 export default Bench.suite('workflowCompiler', { layer: NodeRegistry.layer })(
@@ -66,7 +66,7 @@ Exit codes: `0` ok, `1` regression or blown budget, `2` failed bench or error, `
 Optional `effect-bench.config.ts` in the working directory:
 
 ```ts
-import { BenchConfig } from '@avtheking/bench/cli'
+import { BenchConfig } from '@avtheking/bench-cli'
 
 export default BenchConfig.make({
   include: ['**/bench/*.bench.ts'],
@@ -75,17 +75,11 @@ export default BenchConfig.make({
 })
 ```
 
-## Install
+## Packages
 
-```sh
-pnpm add -D @avtheking/bench effect @effect/platform-node
-```
-
-One package, three entry points:
-
-- `@avtheking/bench` — DSL, measuring loop, stats, comparison, runner, reporters. No platform imports.
-- `@avtheking/bench/node` — hrtime clock, GC and heap, environment fingerprint, file baseline store.
-- `@avtheking/bench/cli` — config helpers; the `effect-bench` command is the package bin.
+- `@avtheking/bench-core` — DSL, measuring loop, stats, comparison, runner, reporters. No platform imports.
+- `@avtheking/bench-node` — hrtime clock, GC and heap, environment fingerprint, file baseline store.
+- `@avtheking/bench-cli` — `effect-bench` command.
 
 ## Known limitations
 

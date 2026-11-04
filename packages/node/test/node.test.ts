@@ -1,10 +1,10 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Bench, BenchEnvironment, BenchMemory, Runner } from '@avtheking/bench-core'
 import { assert, describe, it } from '@effect/vitest'
 import { Effect } from 'effect'
-import { Bench, BenchEnvironment, BenchMemory, Runner } from '../src/index.ts'
-import { NodeBench } from '../src/node/index.ts'
+import { NodeBench } from '../src/index.ts'
 
 const suite = Bench.suite('node', { samples: 5, minTime: 0, warmup: 0, memory: true })(
   Bench.sync('allocate', () => Array.from({ length: 1000 }, (_, i) => ({ i })))
