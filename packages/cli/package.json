@@ -1,6 +1,6 @@
 {
   "name": "@effect-bench/cli",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "bin": {
     "effect-bench": "./src/bin.ts"
@@ -35,5 +35,8 @@
     "bin": {
       "effect-bench": "./dist/src/bin.js"
     }
+  },
+  "scripts": {
+    "prepack": "cp ../../README.md README.md"
   }
 }
