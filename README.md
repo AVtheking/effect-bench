@@ -5,20 +5,25 @@ Benchmarks for [Effect](https://effect.website) code, with JSON output and basel
 Community project, not affiliated with the Effect team.
 
 ```ts
-// bench/schema.bench.ts
+// bench/user.bench.ts
 import { Bench } from '@effect-bench/core'
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 
-export default Bench.suite('workflowCompiler', { layer: NodeRegistry.layer })(
-  Bench.params('compile', { nodes: [10, 100, 1000] }, {
-    prepare: ({ nodes }) => Effect.succeed(makeDraft(nodes)),   // untimed
-    run: draft => compile(draft),                                // timed
-  }),
+const User = Schema.Struct({ id: Schema.Number, email: Schema.String, tags: Schema.Array(Schema.String) })
+const user = { id: 1, email: 'ada@example.com', tags: ['admin'] }
+const decodeSync = Schema.decodeUnknownSync(User)
+const decodeEffect = Schema.decodeUnknownEffect(User)
+
+export default Bench.suite('userSchema')(
   Bench.group('decode', { baseline: 'sync' })(
-    Bench.sync('sync', () => decodeSync(lead)),
-    Bench.make('effect', () => decodeEffect(lead)),
+    Bench.sync('sync', () => decodeSync(user)),
+    Bench.make('effect', () => decodeEffect(user)),
   ),
-  Bench.sync('encode', () => encode(payload), { budget: { p99: '5 millis' } }),
+  Bench.params('stringify', { rows: [10, 1000] }, {
+    prepare: ({ rows }) => Effect.succeed(Array.from({ length: rows }, () => user)), // untimed
+    sync: users => JSON.stringify(users),                                            // timed
+    budget: { p99: '5 millis' },
+  }),
 )
 ```
 
@@ -37,7 +42,7 @@ effect-bench run --rigorous --forks 8   # more processes for a tighter interval
 | `Bench.make(name, effect)` | re-runs one Effect value |
 | `Bench.make(name, ctx => effect)` | builds and runs a fresh Effect per operation |
 | `Bench.sync(name, ctx => value)` | a plain function |
-| `Bench.params(name, matrix, { prepare?, run \| sync })` | one bench per combination, ids like `compile[nodes=100]` |
+| `Bench.params(name, matrix, { prepare?, run \| sync })` | one bench per combination, ids like `stringify[rows=1000]` |
 | `Bench.group(name, { baseline })(...)` | alternatives, reported as a ratio to the baseline |
 
 `Bench.suite(name, { layer, setup, ...options })` builds `layer` once per suite and runs `setup` in the suite's scope; its result is the `ctx` each bench receives. Benches can only use services the layer provides — anything else is a type error.
@@ -49,8 +54,8 @@ Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap de
 `--json` prints one record per line on stdout: a `result` per bench and a final `summary`. Logs go to stderr.
 
 ```json
-{"type":"result","schemaVersion":1,"status":"ok","id":"leadSchema/decode/effect","stats":{"medianNs":858,"p99Ns":943,"opsPerSec":1165161,...},"comparison":{"baseline":"before","change":0.051,"ci":[0.039,0.058],"verdict":"slower","stale":false},"relative":{"baselineId":"leadSchema/decode/sync","ratio":5.1}}
-{"type":"summary","schemaVersion":1,"total":4,"failed":0,"regressions":1,"budgetsExceeded":0,"stale":0,"exitCode":1}
+{"type":"result","schemaVersion":2,"status":"ok","id":"userSchema/decode/effect","stats":{"medianNs":858,"p99Ns":943,"opsPerSec":1165161,...},"comparison":{"baseline":"before","change":0.051,"ci":[0.039,0.058],"verdict":"slower","stale":false},"relative":{"baselineId":"userSchema/decode/sync","ratio":5.1}}
+{"type":"summary","schemaVersion":2,"total":4,"failed":0,"regressions":1,"budgetsExceeded":0,"stale":0,"exitCode":1}
 ```
 
 ## How verdicts work
