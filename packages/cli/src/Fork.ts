@@ -6,7 +6,8 @@ import { Console, Effect, Schema } from 'effect'
 /** Marks result lines so stray console output from bench code is ignored. */
 export const recordPrefix = '@@effect-bench '
 
-const bin = fileURLToPath(new URL('./bin.ts', import.meta.url))
+// Published builds run from dist/*.js, the workspace from src/*.ts.
+const bin = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './bin.ts' : './bin.js', import.meta.url))
 const decodeRaw = Schema.decodeUnknownSync(Schema.fromJsonString(RawResult))
 
 interface ChildOutput {

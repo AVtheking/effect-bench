@@ -3,14 +3,18 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.3.4",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "check": "pnpm format:fix && pnpm lint && pnpm typecheck && pnpm test",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "lint": "oxlint",
     "format:fix": "oxfmt --write \"packages/**/*.ts\"",
-    "bench": "node packages/cli/src/bin.ts"
+    "bench": "node packages/cli/src/bin.ts",
+    "build": "rm -rf packages/*/dist && tsc -b",
+    "release": "pnpm check && pnpm build && pnpm -r publish"
   },
   "devDependencies": {
     "@effect/vitest": "4.1.2",

@@ -11,5 +11,18 @@
   },
   "devDependencies": {
     "effect": "4.1.2"
+  },
+  "files": [
+    "dist/src",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/src/index.d.ts",
+        "default": "./dist/src/index.js"
+      }
+    }
   }
 }
