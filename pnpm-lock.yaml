@@ -130,10 +130,10 @@ importers:
 
   examples:
     dependencies:
-      '@avtheking/bench-cli':
+      '@effect-bench/cli':
         specifier: workspace:*
         version: link:../packages/cli
-      '@avtheking/bench-core':
+      '@effect-bench/core':
         specifier: workspace:*
         version: link:../packages/core
       effect:
@@ -142,10 +142,10 @@ importers:
 
   packages/cli:
     dependencies:
-      '@avtheking/bench-core':
+      '@effect-bench/core':
         specifier: workspace:*
         version: link:../core
-      '@avtheking/bench-node':
+      '@effect-bench/node':
         specifier: workspace:*
         version: link:../node
     devDependencies:
@@ -164,7 +164,7 @@ importers:
 
   packages/node:
     dependencies:
-      '@avtheking/bench-core':
+      '@effect-bench/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:

@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "scripts": { "bench": "effect-bench run" },
-  "dependencies": { "@avtheking/bench-cli": "workspace:*", "@avtheking/bench-core": "workspace:*", "effect": "4.1.2" }
+  "dependencies": { "@effect-bench/cli": "workspace:*", "@effect-bench/core": "workspace:*", "effect": "4.1.2" }
 }

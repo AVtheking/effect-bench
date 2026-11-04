@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { glob } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Bench } from '@avtheking/bench-core'
+import type { Bench } from '@effect-bench/core'
 import { Data, Effect } from 'effect'
 import { type Config, defaults } from './Config.ts'
 

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { RawResult, Runner } from '@avtheking/bench-core'
+import { RawResult, Runner } from '@effect-bench/core'
 import { Console, Effect, Schema } from 'effect'
 
 /** Marks result lines so stray console output from bench code is ignored. */
