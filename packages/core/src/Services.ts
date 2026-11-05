@@ -12,10 +12,22 @@ export const BenchClock = Context.Reference<Clock>('effect-bench/BenchClock', {
 export interface Memory {
   readonly gc: (() => void) | undefined
   readonly heapUsed: (() => number) | undefined
+  /** Resident set size of the process, for stream peaks. */
+  readonly rss: (() => number) | undefined
 }
 
 export const BenchMemory = Context.Reference<Memory>('effect-bench/BenchMemory', {
-  defaultValue: () => ({ gc: undefined, heapUsed: undefined }),
+  defaultValue: () => ({ gc: undefined, heapUsed: undefined, rss: undefined }),
+})
+
+export interface PhaseRecorder {
+  /** Path of the enclosing phase, empty at the top of a run. */
+  readonly path: string
+  readonly record: (path: string, ns: number) => void
+}
+
+export const BenchPhases = Context.Reference<PhaseRecorder>('effect-bench/BenchPhases', {
+  defaultValue: () => ({ path: '', record: () => {} }),
 })
 
 export interface EnvironmentProbe {

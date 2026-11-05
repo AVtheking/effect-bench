@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Bench, BenchEnvironment, BenchMemory, Runner } from '@effect-bench/core'
 import { assert, describe, it } from '@effect/vitest'
-import { Effect } from 'effect'
+import { Effect, Stream } from 'effect'
 import { NodeBench } from '../src/index.ts'
 
 const suite = Bench.suite('node', { samples: 5, minTime: 0, warmup: 0, memory: true })(
@@ -30,5 +30,20 @@ describe('NodeBench', () => {
       const compared = second.results[0]
       assert.strictEqual(compared?.status === 'ok' && compared.comparison?.stale, false)
     }).pipe(Effect.provide(NodeBench.layer({ baselineDirectory: mkdtempSync(join(tmpdir(), 'effect-bench-')) })))
+  )
+
+  it.effect('turns on memory for a heapDelta budget and reports stream RSS', () =>
+    Effect.gen(function* () {
+      const budgeted = Bench.suite('memory', { samples: 5, minTime: 0, warmup: 0 })(
+        Bench.sync('allocate', () => Array.from({ length: 1000 }, (_, i) => ({ i })), {
+          budget: { heapDelta: '1 B' },
+        }),
+        Bench.stream('range', { stream: () => Stream.range(1, 10_000) })
+      )
+      const { results } = yield* Runner.run([budgeted])
+      const [allocate, range] = results
+      assert.strictEqual(allocate?.status === 'ok' && allocate.budget?.status, 'exceeded')
+      assert.isAbove((range?.status === 'ok' && range.metrics?.['peakRssBytes']) || 0, 0)
+    }).pipe(Effect.provide(NodeBench.layer()))
   )
 })

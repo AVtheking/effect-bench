@@ -1,7 +1,7 @@
 import { Console, Effect, Layer } from 'effect'
 import { type BenchResult, schemaVersion } from './BenchResult.ts'
 import { BenchReporter } from './Services.ts'
-import { formatNs } from './Stats.ts'
+import { formatBytes, formatNs } from './Stats.ts'
 
 const json = Layer.succeed(BenchReporter, {
   onResult: result => Console.log(JSON.stringify({ type: 'result', schemaVersion, ...result })),
@@ -28,6 +28,14 @@ const row = (result: BenchResult): ReadonlyArray<string> => {
   ]
 }
 
+/** The key suffix gives the unit: `firstItemNs`, `peakRssBytes`, `phase:compileNs`. */
+const metric = ([key, value]: [string, number]) =>
+  key.endsWith('Ns')
+    ? `${key.slice(0, -2)} ${formatNs(value)}`
+    : key.endsWith('Bytes')
+      ? `${key.slice(0, -5)} ${formatBytes(value)}`
+      : `${key} ${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+
 const render = (rows: ReadonlyArray<ReadonlyArray<string>>) => {
   const widths = rows[0]!.map((_, column) => Math.max(...rows.map(cells => cells[column]!.length)))
   return rows
@@ -46,6 +54,12 @@ const table = Layer.succeed(BenchReporter, {
     Effect.gen(function* () {
       if (results.length === 0) return yield* Console.log('No benches matched.')
       yield* Console.log(render([['bench', 'median', 'p99', 'rme', 'ops/s', 'change', 'budget'], ...results.map(row)]))
+      const withMetrics = results.flatMap(result =>
+        result.status === 'ok' && result.metrics !== null && Object.keys(result.metrics).length > 0
+          ? [[result.id, Object.entries(result.metrics).map(metric).join('  ')]]
+          : []
+      )
+      if (withMetrics.length > 0) yield* Console.log(`\n${render([['bench', 'metrics'], ...withMetrics])}`)
       for (const result of results)
         if (result.status === 'failed') yield* Console.log(`\n${result.id}:\n${result.message}`)
       yield* Console.log(

@@ -1,5 +1,5 @@
-import { Cause, type Context, Data, Duration, Effect, Exit, Layer, Option, type Scope } from 'effect'
-import { type Bench, benchId, type Options, type Suite } from './Bench.ts'
+import { Cause, type Context, Data, Duration, Effect, Exit, Layer, Option, type Scope, Stream } from 'effect'
+import { type Bench, benchId, type Options, type Size, type Suite } from './Bench.ts'
 import type {
   Baseline,
   BaselineEntry,
@@ -15,9 +15,9 @@ import type {
 } from './BenchResult.ts'
 import { schemaVersion } from './BenchResult.ts'
 import { compare } from './Compare.ts'
-import { measure } from './Measure.ts'
+import { CheckFailed, measure } from './Measure.ts'
 import { BaselineError, BaselineStore, BenchEnvironment, BenchReporter } from './Services.ts'
-import { compute, formatNs, median } from './Stats.ts'
+import { compute, formatBytes, formatNs, median } from './Stats.ts'
 
 export interface MeasureOptions {
   /** Only run benches whose id contains this text, or that carry this tag. */
@@ -57,6 +57,14 @@ class BenchFailure extends Data.TaggedError('BenchFailure')<{
 
 const toNs = (input: Duration.Input) => Number(Duration.toNanosUnsafe(input))
 
+const bytesPer = { B: 1, KB: 1e3, KiB: 1024, MB: 1e6, MiB: 1024 ** 2, GB: 1e9, GiB: 1024 ** 3 } as const
+
+const toBytes = (size: Size): number => {
+  if (typeof size === 'number') return size
+  const [amount, unit] = size.split(' ') as [string, keyof typeof bytesPer]
+  return Number(amount) * bytesPer[unit]
+}
+
 const failWith = (phase: FailedResult['phase']) => (cause: Cause.Cause<unknown>) =>
   new BenchFailure({ phase, message: Cause.pretty(cause) })
 
@@ -77,14 +85,19 @@ export const list = (suites: ReadonlyArray<Suite>, filter?: string): ReadonlyArr
     suite.benches.map(bench => plannedOf(suite, bench, undefined)).filter(planned => matches(planned, filter))
   )
 
-const checkBudget = (budgetNs: RawOk['budgetNs'], stats: Stats): BudgetCheck | null => {
-  if (budgetNs === null) return null
-  const violations = (['p50', 'p99'] as const).flatMap(key => {
-    const limit = budgetNs[key]
-    if (limit === null) return []
-    const actual = key === 'p50' ? stats.medianNs : stats.p99Ns
-    return actual > limit ? [`${key} ${formatNs(actual)} > ${formatNs(limit)}`] : []
-  })
+const checkBudget = (limits: RawOk['limits'], stats: Stats, heapDeltaBytes: number | null): BudgetCheck | null => {
+  if (limits === null) return null
+  const violations = [
+    ...(limits.p50Ns !== null && stats.medianNs > limits.p50Ns
+      ? [`p50 ${formatNs(stats.medianNs)} > ${formatNs(limits.p50Ns)}`]
+      : []),
+    ...(limits.p99Ns !== null && stats.p99Ns > limits.p99Ns
+      ? [`p99 ${formatNs(stats.p99Ns)} > ${formatNs(limits.p99Ns)}`]
+      : []),
+    ...(limits.heapDeltaBytes !== null && heapDeltaBytes !== null && heapDeltaBytes > limits.heapDeltaBytes
+      ? [`heapDelta ${formatBytes(heapDeltaBytes)} > ${formatBytes(limits.heapDeltaBytes)}`]
+      : []),
+  ]
   return { status: violations.length === 0 ? 'ok' : 'exceeded', violations }
 }
 
@@ -103,11 +116,15 @@ const runBench = Effect.fn('effectBench/runBench')(function* (
 ) {
   const operation = yield* bench.prepare(ctx).pipe(Effect.catchCause(cause => Effect.fail(failWith('prepare')(cause))))
 
-  if (bench.check !== undefined) {
+  if (bench.check !== undefined && operation._tag !== 'Scenario') {
     const value =
       operation._tag === 'Sync'
         ? yield* Effect.try({ try: operation.run, catch: error => error })
-        : yield* operation.run
+        : operation._tag === 'Effect'
+          ? yield* operation.single ?? operation.run
+          : operation._tag === 'PerOp'
+            ? yield* Effect.flatMap(operation.before, operation.run)
+            : yield* Stream.runCount(operation.stream())
     if (!bench.check(value)) {
       return yield* new BenchFailure({ phase: 'check', message: `check rejected the result: ${String(value)}` })
     }
@@ -117,7 +134,7 @@ const runBench = Effect.fn('effectBench/runBench')(function* (
     samples: options.samples ?? defaults.samples,
     minTimeNs: toNs(options.minTime ?? defaults.minTime),
     warmupNs: toNs(options.warmup ?? defaults.warmup),
-    memory: options.memory ?? defaults.memory,
+    memory: options.memory === true || options.budget?.heapDelta !== undefined,
   })
 
   const { budget } = options
@@ -132,18 +149,21 @@ const runBench = Effect.fn('effectBench/runBench')(function* (
     batchSize: measurement.batchSize,
     overheadNs: measurement.overheadNs,
     heapDeltaBytes: measurement.heapDeltaBytes,
-    budgetNs:
+    metrics: measurement.metrics,
+    limits:
       budget === undefined
         ? null
         : {
-            p50: budget.p50 === undefined ? null : toNs(budget.p50),
-            p99: budget.p99 === undefined ? null : toNs(budget.p99),
+            p50Ns: budget.p50 === undefined ? null : toNs(budget.p50),
+            p99Ns: budget.p99 === undefined ? null : toNs(budget.p99),
+            heapDeltaBytes: budget.heapDelta === undefined ? null : toBytes(budget.heapDelta),
           },
   } satisfies RawOk
 })
 
 const failureOf = (cause: Cause.Cause<unknown>): BenchFailure => {
   const error = Cause.squash(cause)
+  if (error instanceof CheckFailed) return new BenchFailure({ phase: 'check', message: error.message })
   return error instanceof BenchFailure ? error : failWith('run')(cause)
 }
 
@@ -177,7 +197,7 @@ const runSuite = Effect.fn('effectBench/runSuite')(function* (
 
   const results: Array<RawResult> = []
   for (const { bench, planned } of benches) {
-    const options = { ...defaults, ...mode, ...suite.options, ...bench.options }
+    const options = { ...defaults, ...bench.defaults, ...mode, ...suite.options, ...bench.options }
     const exit = yield* Effect.exit(
       provideSuite(runBench(bench, planned, setup.value.ctx, options), setup.value.context)
     )
@@ -222,7 +242,9 @@ const merge = (
   const stats = compute(forks.flat())
   const heap = oks.flatMap(run => (run.heapDeltaBytes === null ? [] : [run.heapDeltaBytes]))
   const recorded = baseline?.entries.find(entry => entry.id === first.id)
-  const { relativeTo, samplesNs, budgetNs, ...identity } = first
+  const { relativeTo, samplesNs, limits, metrics: _, ...identity } = first
+  const metricKeys = [...new Set(oks.flatMap(run => Object.keys(run.metrics ?? {})))]
+  const heapDeltaBytes = heap.length === 0 ? null : median(heap)
 
   return {
     result: {
@@ -231,8 +253,12 @@ const merge = (
       forks: forks.length,
       batchSize: median(oks.map(run => run.batchSize)),
       overheadNs: median(oks.map(run => run.overheadNs)),
-      heapDeltaBytes: heap.length === 0 ? null : median(heap),
-      budget: checkBudget(budgetNs, stats),
+      heapDeltaBytes,
+      metrics:
+        metricKeys.length === 0
+          ? null
+          : Object.fromEntries(metricKeys.map(key => [key, median(oks.flatMap(run => run.metrics?.[key] ?? []))])),
+      budget: checkBudget(limits, stats, heapDeltaBytes),
       comparison:
         recorded === undefined || baseline === undefined
           ? null

@@ -50,3 +50,14 @@ export const formatNs = (ns: number): string => {
   for (const [scale, unit] of units) if (Math.abs(ns) >= scale) return `${(ns / scale).toPrecision(3)} ${unit}`
   return `${ns.toPrecision(3)} ns`
 }
+
+export const formatBytes = (bytes: number): string => {
+  const units = ['B', 'KiB', 'MiB', 'GiB'] as const
+  let value = Math.abs(bytes)
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${bytes < 0 ? '-' : ''}${unit === 0 ? value.toFixed(0) : value.toPrecision(3)} ${units[unit]}`
+}

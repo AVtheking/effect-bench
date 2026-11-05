@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-export const schemaVersion = 2
+export const schemaVersion = 3
 
 export const Stats = Schema.Struct({
   samples: Schema.Number,
@@ -56,6 +56,9 @@ export const Relative = Schema.Struct({
 })
 export type Relative = typeof Relative.Type
 
+/** Extra numbers per bench, such as stream time to first item or scenario phases; the key suffix gives the unit. */
+export const Metrics = Schema.NullOr(Schema.Record(Schema.String, Schema.Number))
+
 const identity = {
   id: Schema.String,
   suite: Schema.String,
@@ -74,6 +77,7 @@ export const OkResult = Schema.Struct({
   batchSize: Schema.Number,
   overheadNs: Schema.Number,
   heapDeltaBytes: Schema.NullOr(Schema.Number),
+  metrics: Metrics,
   budget: Schema.NullOr(BudgetCheck),
   comparison: Schema.NullOr(Comparison),
   relative: Schema.NullOr(Relative),
@@ -100,7 +104,14 @@ export const RawOk = Schema.Struct({
   batchSize: Schema.Number,
   overheadNs: Schema.Number,
   heapDeltaBytes: Schema.NullOr(Schema.Number),
-  budgetNs: Schema.NullOr(Schema.Struct({ p50: Schema.NullOr(Schema.Number), p99: Schema.NullOr(Schema.Number) })),
+  metrics: Metrics,
+  limits: Schema.NullOr(
+    Schema.Struct({
+      p50Ns: Schema.NullOr(Schema.Number),
+      p99Ns: Schema.NullOr(Schema.Number),
+      heapDeltaBytes: Schema.NullOr(Schema.Number),
+    })
+  ),
 })
 export type RawOk = typeof RawOk.Type
 

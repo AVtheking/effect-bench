@@ -25,6 +25,7 @@ const exposeGc = (): (() => void) | undefined => {
 export const memory = Layer.sync(BenchMemory, () => ({
   gc: exposeGc(),
   heapUsed: () => process.memoryUsage().heapUsed,
+  rss: () => process.memoryUsage.rss(),
 }))
 
 const git = (args: ReadonlyArray<string>): string | null => {

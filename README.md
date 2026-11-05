@@ -44,18 +44,37 @@ effect-bench run --rigorous --forks 8   # more processes for a tighter interval
 | `Bench.sync(name, ctx => value)` | a plain function |
 | `Bench.params(name, matrix, { prepare?, run \| sync })` | one bench per combination, ids like `stringify[rows=1000]` |
 | `Bench.group(name, { baseline })(...)` | alternatives, reported as a ratio to the baseline |
+| `Bench.make(name, { prepare?, before?, run })` | `before` builds a fresh input for every operation, untimed |
+| `Bench.throughput(name, { ops, concurrency, prepare?, run })` | `ops` operations at that many fibers, per operation; an array of concurrencies gives ids like `offer[concurrency=16]` |
+| `Bench.stream(name, { prepare?, stream })` | a stream run to the end, per item; metrics `firstItem`, `items` and `peakRss` |
+| `Bench.scenario(name, { prepare?, before?, run, verify? })` | a longer flow, timed once per run; `verify` checks every run |
+| `Bench.phase(name, effect)` | times part of a scenario, reported as `phase:name` (nested as `outer/inner`) |
 
 `Bench.suite(name, { layer, setup, ...options })` builds `layer` once per suite and runs `setup` in the suite's scope; its result is the `ctx` each bench receives. Benches can only use services the layer provides — anything else is a type error.
 
-Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap delta per sample), `budget: { p50, p99 }`, `tags`, and `check` (validates one result before timing).
+Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap delta per sample), `budget: { p50, p99, heapDelta }`, `tags`, and `check` (validates one result before timing). A `heapDelta` budget such as `'2 MiB'` turns on `memory`. Scenarios default to 10 samples with no warmup time, streams to 10 samples.
+
+```ts
+Bench.scenario('import', {
+  before: () => writeFixture(rows),                    // untimed, every run
+  run: file =>
+    Effect.gen(function* () {
+      const parsed = yield* Bench.phase('parse', parseCsv(file))
+      return yield* Bench.phase('insert', insertRows(parsed))
+    }),
+  verify: inserted => inserted === rows.length,
+})
+```
+
+Streams and scenarios add a `metrics` record to each result; the key suffix gives the unit (`firstItemNs`, `peakRssBytes`, `phase:parseNs`). `peakRss` is the whole process's resident memory, so earlier benches in the same process count toward it.
 
 ## Output
 
 `--json` prints one record per line on stdout: a `result` per bench and a final `summary`. Logs go to stderr.
 
 ```json
-{"type":"result","schemaVersion":2,"status":"ok","id":"userSchema/decode/effect","stats":{"medianNs":858,"p99Ns":943,"opsPerSec":1165161,...},"comparison":{"baseline":"before","change":0.051,"ci":[0.039,0.058],"verdict":"slower","stale":false},"relative":{"baselineId":"userSchema/decode/sync","ratio":5.1}}
-{"type":"summary","schemaVersion":2,"total":4,"failed":0,"regressions":1,"budgetsExceeded":0,"stale":0,"exitCode":1}
+{"type":"result","schemaVersion":3,"status":"ok","id":"userSchema/decode/effect","stats":{"medianNs":858,"p99Ns":943,"opsPerSec":1165161,...},"comparison":{"baseline":"before","change":0.051,"ci":[0.039,0.058],"verdict":"slower","stale":false},"relative":{"baselineId":"userSchema/decode/sync","ratio":5.1}}
+{"type":"summary","schemaVersion":3,"total":4,"failed":0,"regressions":1,"budgetsExceeded":0,"stale":0,"exitCode":1}
 ```
 
 ## How verdicts work
