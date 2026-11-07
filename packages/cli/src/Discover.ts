@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { glob } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Bench } from '@effect-bench/core'
+import { Bench } from '@effect-bench/core'
 import { Data, Effect } from 'effect'
 import { type Config, defaults } from './Config.ts'
 
@@ -25,8 +25,7 @@ export const loadConfig = Effect.fn('effectBench/loadConfig')(function* (cwd: st
   return ((yield* importModule(file)).default ?? {}) as Config
 })
 
-const isSuite = (value: unknown): value is Bench.Suite =>
-  typeof value === 'object' && value !== null && '_tag' in value && value._tag === 'Suite'
+const isSuite = Bench.Definition.$is('Suite')
 
 export const discover = Effect.fn('effectBench/discover')(function* (cwd: string, config: Config) {
   const exclude = config.exclude ?? defaults.exclude

@@ -1,5 +1,5 @@
 import { Cause, type Context, Data, Duration, Effect, Exit, Layer, Option, type Scope, Stream } from 'effect'
-import { type Bench, benchId, type Options, type Size, type Suite } from './Bench.ts'
+import { type Bench, benchId, Operation, type Options, type Size, type Suite } from './Bench.ts'
 import type {
   Baseline,
   BaselineEntry,
@@ -108,6 +108,9 @@ const isStale = (current: Environment, recorded: Environment) =>
   current.arch !== recorded.arch ||
   current.cpu !== recorded.cpu
 
+/** Scenarios check every run with `verify` instead. */
+const Checkable = Data.taggedEnum<Exclude<Operation, { readonly _tag: 'Scenario' }>>()
+
 const runBench = Effect.fn('effectBench/runBench')(function* (
   bench: Bench,
   planned: PlannedBench,
@@ -116,15 +119,13 @@ const runBench = Effect.fn('effectBench/runBench')(function* (
 ) {
   const operation = yield* bench.prepare(ctx).pipe(Effect.catchCause(cause => Effect.fail(failWith('prepare')(cause))))
 
-  if (bench.check !== undefined && operation._tag !== 'Scenario') {
-    const value =
-      operation._tag === 'Sync'
-        ? yield* Effect.try({ try: operation.run, catch: error => error })
-        : operation._tag === 'Effect'
-          ? yield* operation.single ?? operation.run
-          : operation._tag === 'PerOp'
-            ? yield* Effect.flatMap(operation.before, operation.run)
-            : yield* Stream.runCount(operation.stream())
+  if (bench.check !== undefined && !Operation.$is('Scenario')(operation)) {
+    const value = yield* Checkable.$match(operation, {
+      Sync: ({ run }) => Effect.try({ try: run, catch: error => error }),
+      Effect: ({ run, single }) => single ?? run,
+      PerOp: ({ before, run }) => Effect.flatMap(before, run),
+      Stream: ({ stream }) => Stream.runCount(stream()),
+    })
     if (!bench.check(value)) {
       return yield* new BenchFailure({ phase: 'check', message: `check rejected the result: ${String(value)}` })
     }

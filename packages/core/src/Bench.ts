@@ -1,5 +1,5 @@
 import type { Duration, Scope } from 'effect'
-import { Effect, Layer, Stream } from 'effect'
+import { Data, Effect, Layer, Stream } from 'effect'
 import { BenchClock, BenchPhases } from './Services.ts'
 
 export type ParamValue = string | number | boolean
@@ -27,28 +27,28 @@ export interface Options {
   readonly tags?: ReadonlyArray<string>
 }
 
-export type Operation =
-  | { readonly _tag: 'Sync'; readonly run: () => unknown }
-  | {
-      readonly _tag: 'Effect'
-      readonly run: Effect.Effect<unknown, unknown>
-      /** Operations one run performs; stats are reported per operation. */
-      readonly units?: number
-      /** A single operation, for `check`, when `run` performs several. */
-      readonly single?: Effect.Effect<unknown, unknown>
-    }
-  | {
-      readonly _tag: 'PerOp'
-      readonly before: Effect.Effect<unknown, unknown>
-      readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
-    }
-  | { readonly _tag: 'Stream'; readonly stream: () => Stream.Stream<unknown, unknown> }
-  | {
-      readonly _tag: 'Scenario'
-      readonly before: Effect.Effect<unknown, unknown> | undefined
-      readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
-      readonly verify: ((value: unknown) => boolean) | undefined
-    }
+export type Operation = Data.TaggedEnum<{
+  Sync: { readonly run: () => unknown }
+  Effect: {
+    readonly run: Effect.Effect<unknown, unknown>
+    /** Operations one run performs; stats are reported per operation. */
+    readonly units?: number
+    /** A single operation, for `check`, when `run` performs several. */
+    readonly single?: Effect.Effect<unknown, unknown>
+  }
+  PerOp: {
+    readonly before: Effect.Effect<unknown, unknown>
+    readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
+  }
+  Stream: { readonly stream: () => Stream.Stream<unknown, unknown> }
+  Scenario: {
+    readonly before: Effect.Effect<unknown, unknown> | undefined
+    readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
+    readonly verify: ((value: unknown) => boolean) | undefined
+  }
+}>
+
+export const Operation = Data.taggedEnum<Operation>()
 
 export interface Bench<in Ctx = any, out R = any> {
   readonly _tag: 'Bench'
@@ -72,6 +72,10 @@ export interface Suite {
   readonly benches: ReadonlyArray<Bench>
 }
 
+export type Definition = Bench | Suite
+
+export const Definition = Data.taggedEnum<Definition>()
+
 export interface SuiteOptions<Ctx, ROut> extends Options {
   readonly layer?: Layer.Layer<ROut, unknown>
   readonly setup?: Effect.Effect<Ctx, unknown, ROut | Scope.Scope>
@@ -83,14 +87,13 @@ export const suite =
   <Ctx = undefined, ROut = never>(name: string, options: SuiteOptions<Ctx, ROut> = {}) =>
   (...entries: ReadonlyArray<Entry<Ctx, ROut>>): Suite => {
     const { layer, setup, ...defaults } = options
-    return {
-      _tag: 'Suite',
+    return Definition.Suite({
       name,
       layer: layer ?? Layer.empty,
       setup: setup ?? Effect.undefined,
       options: defaults,
       benches: entries.flat(),
-    }
+    })
   }
 
 type BenchOptions<A> = Options & { readonly check?: (value: A) => boolean }
@@ -100,7 +103,7 @@ const makeBench = <Ctx, R>(
   prepare: (ctx: Ctx) => Effect.Effect<Operation, unknown, R>,
   { check, ...options }: BenchOptions<any>,
   { params = {}, defaults = {} }: { readonly params?: Params; readonly defaults?: Options } = {}
-): Bench<Ctx, R> => ({ _tag: 'Bench', name, params, group: undefined, options, defaults, check, prepare })
+): Bench<Ctx, R> => Definition.Bench({ name, params, group: undefined, options, defaults, check, prepare })
 
 export interface Spec<Ctx, I, B, A, E, R> extends BenchOptions<A> {
   /** Runs once, untimed. */
@@ -113,59 +116,57 @@ export interface Spec<Ctx, I, B, A, E, R> extends BenchOptions<A> {
 /**
  * An Effect value is re-run as is; a function is called for every operation, so building the Effect is measured too.
  */
-export const make: {
-  <Ctx = unknown, A = unknown, E = never, R = never>(
-    name: string,
-    run: Effect.Effect<A, E, R> | ((ctx: Ctx) => Effect.Effect<A, E, R>),
-    options?: BenchOptions<A>
-  ): Bench<Ctx, R>
-  <Ctx = unknown, I = undefined, B = I, A = unknown, E = never, R = never>(
-    name: string,
-    spec: Spec<Ctx, I, B, A, E, R>
-  ): Bench<Ctx, R>
-} = (
+export function make<Ctx = unknown, A = unknown, E = never, R = never>(
+  name: string,
+  run: Effect.Effect<A, E, R> | ((ctx: Ctx) => Effect.Effect<A, E, R>),
+  options?: BenchOptions<A>
+): Bench<Ctx, R>
+export function make<Ctx = unknown, I = undefined, B = I, A = unknown, E = never, R = never>(
+  name: string,
+  spec: Spec<Ctx, I, B, A, E, R>
+): Bench<Ctx, R>
+export function make(
   name: string,
   run:
     | Effect.Effect<unknown, unknown, unknown>
     | ((ctx: unknown) => Effect.Effect<unknown, unknown, unknown>)
     | Spec<unknown, unknown, unknown, unknown, unknown, unknown>,
   options: BenchOptions<unknown> = {}
-): Bench<any, any> => {
+): Bench<any, any> {
   if (Effect.isEffect(run) || typeof run === 'function') {
     return makeBench(
       name,
-      ctx =>
-        Effect.map(Effect.context<unknown>(), context => ({
-          _tag: 'Effect' as const,
-          run: Effect.provideContext(Effect.isEffect(run) ? run : Effect.suspend(() => run(ctx)), context),
-        })),
+      (ctx: unknown) =>
+        Effect.map(Effect.context<unknown>(), context =>
+          Operation.Effect({
+            run: Effect.provideContext(Effect.isEffect(run) ? run : Effect.suspend(() => run(ctx)), context),
+          })
+        ),
       options
     )
   }
   const { prepare, before, run: runOne, ...specOptions } = run
   return makeBench(
     name,
-    ctx =>
+    (ctx: unknown) =>
       Effect.gen(function* () {
         const input = prepare === undefined ? undefined : yield* prepare(ctx)
         const context = yield* Effect.context<unknown>()
         if (before === undefined) {
-          return {
-            _tag: 'Effect' as const,
+          return Operation.Effect({
             run: Effect.provideContext(
               Effect.suspend(() => runOne(input, ctx)),
               context
             ),
-          }
+          })
         }
-        return {
-          _tag: 'PerOp' as const,
+        return Operation.PerOp({
           before: Effect.provideContext(
             Effect.suspend(() => before(input, ctx)),
             context
           ),
           run: (value: unknown) => Effect.provideContext(runOne(value, ctx), context),
-        }
+        })
       }),
     specOptions
   )
@@ -175,7 +176,7 @@ export const sync = <Ctx = unknown, A = unknown>(
   name: string,
   run: (ctx: Ctx) => A,
   options: BenchOptions<A> = {}
-): Bench<Ctx, never> => makeBench(name, ctx => Effect.succeed({ _tag: 'Sync', run: () => run(ctx) }), options)
+): Bench<Ctx, never> => makeBench(name, ctx => Effect.succeed(Operation.Sync({ run: () => run(ctx) })), options)
 
 type Matrix = Readonly<Record<string, ReadonlyArray<ParamValue>>>
 
@@ -191,19 +192,17 @@ interface ParamsPrepare<M extends Matrix, Ctx, I, R> {
   readonly prepare?: (params: ParamsOf<M>, ctx: Ctx) => Effect.Effect<I, unknown, R>
 }
 
-export const params: {
-  <const M extends Matrix, Ctx = unknown, I = ParamsOf<M>, A = unknown, E = never, R = never>(
-    name: string,
-    matrix: M,
-    spec: ParamsPrepare<M, Ctx, I, R> &
-      BenchOptions<A> & { readonly run: (input: I, ctx: Ctx) => Effect.Effect<A, E, R> }
-  ): ReadonlyArray<Bench<Ctx, R>>
-  <const M extends Matrix, Ctx = unknown, I = ParamsOf<M>, A = unknown, R = never>(
-    name: string,
-    matrix: M,
-    spec: ParamsPrepare<M, Ctx, I, R> & BenchOptions<A> & { readonly sync: (input: I, ctx: Ctx) => A }
-  ): ReadonlyArray<Bench<Ctx, R>>
-} = (
+export function params<const M extends Matrix, Ctx = unknown, I = ParamsOf<M>, A = unknown, E = never, R = never>(
+  name: string,
+  matrix: M,
+  spec: ParamsPrepare<M, Ctx, I, R> & BenchOptions<A> & { readonly run: (input: I, ctx: Ctx) => Effect.Effect<A, E, R> }
+): ReadonlyArray<Bench<Ctx, R>>
+export function params<const M extends Matrix, Ctx = unknown, I = ParamsOf<M>, A = unknown, R = never>(
+  name: string,
+  matrix: M,
+  spec: ParamsPrepare<M, Ctx, I, R> & BenchOptions<A> & { readonly sync: (input: I, ctx: Ctx) => A }
+): ReadonlyArray<Bench<Ctx, R>>
+export function params(
   name: string,
   matrix: Matrix,
   {
@@ -216,21 +215,22 @@ export const params: {
     readonly run?: (input: unknown, ctx: unknown) => Effect.Effect<unknown, unknown, unknown>
     readonly sync?: (input: unknown, ctx: unknown) => unknown
   } & BenchOptions<unknown>
-): ReadonlyArray<Bench<any, any>> =>
-  combinations(matrix).map(combo =>
+): ReadonlyArray<Bench<any, any>> {
+  return combinations(matrix).map(combo =>
     makeBench(
       name,
-      ctx =>
+      (ctx: unknown) =>
         Effect.gen(function* () {
           const input = prepare === undefined ? combo : yield* prepare(combo, ctx)
-          if (runSync !== undefined) return { _tag: 'Sync' as const, run: () => runSync(input, ctx) }
+          if (runSync !== undefined) return Operation.Sync({ run: () => runSync(input, ctx) })
           const context = yield* Effect.context<unknown>()
-          return { _tag: 'Effect' as const, run: Effect.provideContext(run!(input, ctx), context) }
+          return Operation.Effect({ run: Effect.provideContext(run!(input, ctx), context) })
         }),
       options,
       { params: combo }
     )
   )
+}
 
 export interface ThroughputSpec<Ctx, I, A, E, R> extends BenchOptions<A> {
   /** Operations per run; stats are reported per operation. */
@@ -254,8 +254,7 @@ export const throughput = <Ctx = unknown, I = undefined, A = unknown, E = never,
         Effect.gen(function* () {
           const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
           const context = yield* Effect.context<R>()
-          return {
-            _tag: 'Effect' as const,
+          return Operation.Effect({
             units: ops,
             single: Effect.provideContext(
               Effect.suspend(() => run(0, input, ctx)),
@@ -265,7 +264,7 @@ export const throughput = <Ctx = unknown, I = undefined, A = unknown, E = never,
               Effect.forEach(indexes, index => run(index, input, ctx), { concurrency: fibers, discard: true }),
               context
             ),
-          }
+          })
         }),
       options,
       { params: { concurrency: fibers } }
@@ -290,7 +289,7 @@ export const stream = <Ctx = unknown, I = undefined, A = unknown, E = never, R =
       Effect.gen(function* () {
         const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
         const context = yield* Effect.context<R>()
-        return { _tag: 'Stream' as const, stream: () => Stream.provideContext(build(input, ctx), context) }
+        return Operation.Stream({ stream: () => Stream.provideContext(build(input, ctx), context) })
       }),
     options,
     { defaults: { samples: 10 } }
@@ -317,8 +316,7 @@ export const scenario = <Ctx = unknown, I = undefined, B = I, A = unknown, E = n
       Effect.gen(function* () {
         const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
         const context = yield* Effect.context<R>()
-        return {
-          _tag: 'Scenario' as const,
+        return Operation.Scenario({
           before:
             before === undefined
               ? undefined
@@ -332,7 +330,7 @@ export const scenario = <Ctx = unknown, I = undefined, B = I, A = unknown, E = n
               context
             ),
           verify: verify as ((value: unknown) => boolean) | undefined,
-        }
+        })
       }),
     options,
     { defaults: { samples: 10, minTime: 0, warmup: 0 } }

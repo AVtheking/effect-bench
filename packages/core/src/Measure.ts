@@ -1,5 +1,5 @@
 import { Data, Effect, Stream } from 'effect'
-import type { Operation } from './Bench.ts'
+import { Operation } from './Bench.ts'
 import { BenchClock, BenchMemory, BenchPhases, type Clock, type Memory } from './Services.ts'
 import { median } from './Stats.ts'
 
@@ -57,59 +57,57 @@ const makeTimer = (clock: Clock, memory: Memory | undefined): Timer => {
 }
 
 type Batched = Extract<Operation, { readonly _tag: 'Sync' | 'Effect' | 'PerOp' }>
+const Batched = Data.taggedEnum<Batched>()
+
 type SingleShot = Extract<Operation, { readonly _tag: 'Stream' | 'Scenario' }>
+const SingleShot = Data.taggedEnum<SingleShot>()
+
+type Batch = (n: number, timer: Timer) => Effect.Effect<number, unknown>
 
 /** Returns the elapsed time of the timed part only; `PerOp` inputs are built before the timer starts. */
-const makeBatch =
-  (operation: Batched) =>
-  (n: number, timer: Timer): Effect.Effect<number, unknown> => {
-    switch (operation._tag) {
-      case 'Sync': {
-        const run = operation.run
-        return Effect.sync(() => {
+const makeBatch = (operation: Batched): Batch =>
+  Batched.$match(operation, {
+    Sync:
+      ({ run }): Batch =>
+      (n, timer) =>
+        Effect.sync(() => {
           timer.start()
           for (let i = 0; i < n; i++) blackhole = run()
           return timer.stop()
-        })
-      }
-      case 'Effect': {
-        const run = operation.run
-        return Effect.gen(function* () {
+        }),
+    Effect:
+      ({ run }): Batch =>
+      (n, timer) =>
+        Effect.gen(function* () {
           timer.start()
           for (let i = 0; i < n; i++) blackhole = yield* run
           return timer.stop()
-        })
-      }
-      case 'PerOp': {
-        const { before, run } = operation
-        return Effect.gen(function* () {
+        }),
+    PerOp:
+      ({ before, run }): Batch =>
+      (n, timer) =>
+        Effect.gen(function* () {
           const inputs: Array<unknown> = []
           for (let i = 0; i < n; i++) inputs.push(yield* before)
           timer.start()
           for (const input of inputs) blackhole = yield* run(input)
           return timer.stop()
-        })
-      }
-    }
-  }
+        }),
+  })
 
-const emptyOperation = (operation: Batched): Batched => {
-  switch (operation._tag) {
-    case 'Sync':
-      return { _tag: 'Sync', run: () => undefined }
-    case 'Effect':
-      return { _tag: 'Effect', run: Effect.void }
-    case 'PerOp':
-      return { _tag: 'PerOp', before: Effect.void, run: () => Effect.void }
-  }
-}
+const emptyOperation = (operation: Batched): Batched =>
+  Batched.$match(operation, {
+    Sync: () => Operation.Sync({ run: () => undefined }),
+    Effect: () => Operation.Effect({ run: Effect.void }),
+    PerOp: () => Operation.PerOp({ before: Effect.void, run: () => Effect.void }),
+  })
 
 const measureBatched = Effect.fn('effectBench/measureBatched')(function* (operation: Batched, options: MeasureOptions) {
   const clock = yield* BenchClock
   const memory = yield* BenchMemory
   const targetSampleNs = options.targetSampleNs ?? 1_000_000
   const maxSamples = options.maxSamples ?? 10_000
-  const units = operation._tag === 'Effect' ? (operation.units ?? 1) : 1
+  const units = Batched.$is('Effect')(operation) ? (operation.units ?? 1) : 1
   const batch = makeBatch(operation)
   const empty = makeBatch(emptyOperation(operation))
   const plain = makeTimer(clock, undefined)
@@ -158,48 +156,52 @@ interface Run {
   readonly metrics: Readonly<Record<string, number>>
 }
 
-const runOnce = (operation: SingleShot, clock: Clock, memory: Memory, timer: Timer): Effect.Effect<Run, unknown> => {
-  if (operation._tag === 'Stream') {
-    return Effect.gen(function* () {
-      const stream = operation.stream()
-      const rss = memory.rss
-      let items = 0
-      let chunks = 0
-      let firstItemNs = Number.NaN
-      let peakRss = rss?.() ?? 0
-      const startedAt = timer.start()
-      yield* Stream.runForEachArray(stream, chunk =>
-        Effect.sync(() => {
-          if (items === 0) firstItemNs = clock.nowNs() - startedAt
-          items += chunk.length
-          blackhole = chunk
-          // Reading RSS is a syscall; sampling every 64th chunk keeps it out of the timing.
-          if (rss !== undefined && (chunks++ & 63) === 0) peakRss = Math.max(peakRss, rss())
-        })
-      )
-      const elapsedNs = timer.stop()
-      const metrics: Record<string, number> = { firstItemNs: items === 0 ? elapsedNs : firstItemNs, items }
-      if (rss !== undefined) metrics['peakRssBytes'] = Math.max(peakRss, rss())
-      return { elapsedNs, units: Math.max(items, 1), metrics }
-    })
-  }
-  return Effect.gen(function* () {
-    const input = operation.before === undefined ? undefined : yield* operation.before
-    const phases = new Map<string, number>()
-    const recorder = { path: '', record: (path: string, ns: number) => phases.set(path, (phases.get(path) ?? 0) + ns) }
-    timer.start()
-    const value = yield* Effect.provideService(operation.run(input), BenchPhases, recorder)
-    const elapsedNs = timer.stop()
-    if (operation.verify !== undefined && !operation.verify(value)) {
-      return yield* new CheckFailed({ message: `verify rejected the result: ${String(value)}` })
-    }
-    return {
-      elapsedNs,
-      units: 1,
-      metrics: Object.fromEntries([...phases].map(([path, ns]) => [`phase:${path}Ns`, ns])),
-    }
+const runOnce = (operation: SingleShot, clock: Clock, memory: Memory, timer: Timer): Effect.Effect<Run, unknown> =>
+  SingleShot.$match(operation, {
+    Stream: ({ stream: build }) =>
+      Effect.gen(function* () {
+        const stream = build()
+        const rss = memory.rss
+        let items = 0
+        let chunks = 0
+        let firstItemNs = Number.NaN
+        let peakRss = rss?.() ?? 0
+        const startedAt = timer.start()
+        yield* Stream.runForEachArray(stream, chunk =>
+          Effect.sync(() => {
+            if (items === 0) firstItemNs = clock.nowNs() - startedAt
+            items += chunk.length
+            blackhole = chunk
+            // Reading RSS is a syscall; sampling every 64th chunk keeps it out of the timing.
+            if (rss !== undefined && (chunks++ & 63) === 0) peakRss = Math.max(peakRss, rss())
+          })
+        )
+        const elapsedNs = timer.stop()
+        const metrics: Record<string, number> = { firstItemNs: items === 0 ? elapsedNs : firstItemNs, items }
+        if (rss !== undefined) metrics['peakRssBytes'] = Math.max(peakRss, rss())
+        return { elapsedNs, units: Math.max(items, 1), metrics }
+      }),
+    Scenario: ({ before, run, verify }) =>
+      Effect.gen(function* () {
+        const input = before === undefined ? undefined : yield* before
+        const phases = new Map<string, number>()
+        const recorder = {
+          path: '',
+          record: (path: string, ns: number) => phases.set(path, (phases.get(path) ?? 0) + ns),
+        }
+        timer.start()
+        const value = yield* Effect.provideService(run(input), BenchPhases, recorder)
+        const elapsedNs = timer.stop()
+        if (verify !== undefined && !verify(value)) {
+          return yield* new CheckFailed({ message: `verify rejected the result: ${String(value)}` })
+        }
+        return {
+          elapsedNs,
+          units: 1,
+          metrics: Object.fromEntries([...phases].map(([path, ns]) => [`phase:${path}Ns`, ns])),
+        }
+      }),
   })
-}
 
 /** Streams and scenarios run whole once per sample; they are too slow to batch. */
 const measureRuns = Effect.fn('effectBench/measureRuns')(function* (operation: SingleShot, options: MeasureOptions) {
@@ -235,6 +237,10 @@ const measureRuns = Effect.fn('effectBench/measureRuns')(function* (operation: S
 })
 
 export const measure = (operation: Operation, options: MeasureOptions): Effect.Effect<Measurement, unknown> =>
-  operation._tag === 'Stream' || operation._tag === 'Scenario'
-    ? measureRuns(operation, options)
-    : measureBatched(operation, options)
+  Operation.$match(operation, {
+    Sync: batched => measureBatched(batched, options),
+    Effect: batched => measureBatched(batched, options),
+    PerOp: batched => measureBatched(batched, options),
+    Stream: single => measureRuns(single, options),
+    Scenario: single => measureRuns(single, options),
+  })
