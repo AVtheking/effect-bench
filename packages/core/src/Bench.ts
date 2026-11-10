@@ -98,12 +98,23 @@ export const suite =
 
 type BenchOptions<A> = Options & { readonly check?: (value: A) => boolean }
 
-const makeBench = <Ctx, R>(
-  name: string,
-  prepare: (ctx: Ctx) => Effect.Effect<Operation, unknown, R>,
-  { check, ...options }: BenchOptions<any>,
-  { params = {}, defaults = {} }: { readonly params?: Params; readonly defaults?: Options } = {}
-): Bench<Ctx, R> => Definition.Bench({ name, params, group: undefined, options, defaults, check, prepare })
+interface MakeBench<Ctx, R> {
+  readonly name: string
+  /** Untimed setup that returns the operation to time; stored as `Bench.prepare`. */
+  readonly operation: (ctx: Ctx) => Effect.Effect<Operation, unknown, R>
+  readonly options: BenchOptions<any>
+  readonly params?: Params
+  readonly defaults?: Options
+}
+
+const makeBench = <Ctx, R>({
+  name,
+  operation,
+  options: { check, ...options },
+  params = {},
+  defaults = {},
+}: MakeBench<Ctx, R>): Bench<Ctx, R> =>
+  Definition.Bench({ name, params, group: undefined, options, defaults, check, prepare: operation })
 
 export interface Spec<Ctx, I, B, A, E, R> extends BenchOptions<A> {
   /** Runs once, untimed. */
@@ -134,21 +145,21 @@ export function make(
   options: BenchOptions<unknown> = {}
 ): Bench<any, any> {
   if (Effect.isEffect(run) || typeof run === 'function') {
-    return makeBench(
+    return makeBench({
       name,
-      (ctx: unknown) =>
+      operation: (ctx: unknown) =>
         Effect.map(Effect.context<unknown>(), context =>
           Operation.Effect({
             run: Effect.provideContext(Effect.isEffect(run) ? run : Effect.suspend(() => run(ctx)), context),
           })
         ),
-      options
-    )
+      options,
+    })
   }
   const { prepare, before, run: runOne, ...specOptions } = run
-  return makeBench(
+  return makeBench({
     name,
-    (ctx: unknown) =>
+    operation: (ctx: unknown) =>
       Effect.gen(function* () {
         const input = prepare === undefined ? undefined : yield* prepare(ctx)
         const context = yield* Effect.context<unknown>()
@@ -168,15 +179,20 @@ export function make(
           run: (value: unknown) => Effect.provideContext(runOne(value, ctx), context),
         })
       }),
-    specOptions
-  )
+    options: specOptions,
+  })
 }
 
 export const sync = <Ctx = unknown, A = unknown>(
   name: string,
   run: (ctx: Ctx) => A,
   options: BenchOptions<A> = {}
-): Bench<Ctx, never> => makeBench(name, ctx => Effect.succeed(Operation.Sync({ run: () => run(ctx) })), options)
+): Bench<Ctx, never> =>
+  makeBench({
+    name,
+    operation: (ctx: Ctx) => Effect.succeed(Operation.Sync({ run: () => run(ctx) })),
+    options,
+  })
 
 type Matrix = Readonly<Record<string, ReadonlyArray<ParamValue>>>
 
@@ -217,9 +233,9 @@ export function params(
   } & BenchOptions<unknown>
 ): ReadonlyArray<Bench<any, any>> {
   return combinations(matrix).map(combo =>
-    makeBench(
+    makeBench({
       name,
-      (ctx: unknown) =>
+      operation: (ctx: unknown) =>
         Effect.gen(function* () {
           const input = prepare === undefined ? combo : yield* prepare(combo, ctx)
           if (runSync !== undefined) return Operation.Sync({ run: () => runSync(input, ctx) })
@@ -227,8 +243,8 @@ export function params(
           return Operation.Effect({ run: Effect.provideContext(run!(input, ctx), context) })
         }),
       options,
-      { params: combo }
-    )
+      params: combo,
+    })
   )
 }
 
@@ -248,9 +264,9 @@ export const throughput = <Ctx = unknown, I = undefined, A = unknown, E = never,
 ): ReadonlyArray<Bench<Ctx, R>> => {
   const indexes = Array.from({ length: ops }, (_, index) => index)
   return (typeof concurrency === 'number' ? [concurrency] : concurrency).map(fibers =>
-    makeBench(
+    makeBench({
       name,
-      (ctx: Ctx) =>
+      operation: (ctx: Ctx) =>
         Effect.gen(function* () {
           const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
           const context = yield* Effect.context<R>()
@@ -267,8 +283,8 @@ export const throughput = <Ctx = unknown, I = undefined, A = unknown, E = never,
           })
         }),
       options,
-      { params: { concurrency: fibers } }
-    )
+      params: { concurrency: fibers },
+    })
   )
 }
 
@@ -283,17 +299,17 @@ export const stream = <Ctx = unknown, I = undefined, A = unknown, E = never, R =
   name: string,
   { prepare, stream: build, ...options }: StreamSpec<Ctx, I, A, E, R>
 ): Bench<Ctx, R> =>
-  makeBench(
+  makeBench({
     name,
-    (ctx: Ctx) =>
+    operation: (ctx: Ctx) =>
       Effect.gen(function* () {
         const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
         const context = yield* Effect.context<R>()
         return Operation.Stream({ stream: () => Stream.provideContext(build(input, ctx), context) })
       }),
     options,
-    { defaults: { samples: 10 } }
-  )
+    defaults: { samples: 10 },
+  })
 
 export interface ScenarioSpec<Ctx, I, B, A, E, R> extends Options {
   /** Runs once, untimed. */
@@ -310,9 +326,9 @@ export const scenario = <Ctx = unknown, I = undefined, B = I, A = unknown, E = n
   name: string,
   { prepare, before, run, verify, ...options }: ScenarioSpec<Ctx, I, B, A, E, R>
 ): Bench<Ctx, R> =>
-  makeBench(
+  makeBench({
     name,
-    (ctx: Ctx) =>
+    operation: (ctx: Ctx) =>
       Effect.gen(function* () {
         const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
         const context = yield* Effect.context<R>()
@@ -333,8 +349,8 @@ export const scenario = <Ctx = unknown, I = undefined, B = I, A = unknown, E = n
         })
       }),
     options,
-    { defaults: { samples: 10, minTime: 0, warmup: 0 } }
-  )
+    defaults: { samples: 10, minTime: 0, warmup: 0 },
+  })
 
 /** Times part of a scenario. Nested phases are reported as `outer/inner`; outside a scenario it just runs the effect. */
 export const phase = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>

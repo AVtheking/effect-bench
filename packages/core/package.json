@@ -1,6 +1,13 @@
 {
   "name": "@effect-bench/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AVtheking/effect-bench.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/AVtheking/effect-bench#readme",
+  "bugs": "https://github.com/AVtheking/effect-bench/issues",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
