@@ -156,3 +156,14 @@ describe('Bench.scenario', () => {
     })
   )
 })
+
+describe('profiles', () => {
+  it('adds the profile to every id and skips suites limited to other profiles', () => {
+    const anywhere = Bench.suite('anywhere')(Bench.group('g', { baseline: 'a' })(Bench.sync('a', () => 1)))
+    const largeOnly = Bench.suite('largeOnly', { profiles: ['large'] })(Bench.sync('b', () => 1))
+    const ids = (profile: string) =>
+      Runner.plan([anywhere, largeOnly], { profile }).flatMap(({ benches }) => benches.map(({ planned }) => planned.id))
+    assert.deepStrictEqual(ids('small'), ['anywhere/g/a[profile=small]'])
+    assert.deepStrictEqual(ids('large'), ['anywhere/g/a[profile=large]', 'largeOnly/b[profile=large]'])
+  })
+})

@@ -1,5 +1,5 @@
-import type { Duration, Scope } from 'effect'
-import { Data, Effect, Layer, Stream } from 'effect'
+import type { Scope } from 'effect'
+import { Data, Duration, Effect, Layer, Stream } from 'effect'
 import { BenchClock, BenchPhases } from './Services.ts'
 
 export type ParamValue = string | number | boolean
@@ -8,11 +8,21 @@ export type Params = Readonly<Record<string, ParamValue>>
 
 export type Size = number | `${number} ${'B' | 'KB' | 'KiB' | 'MB' | 'MiB' | 'GB' | 'GiB'}`
 
+const bytesPer = { B: 1, KB: 1e3, KiB: 1024, MB: 1e6, MiB: 1024 ** 2, GB: 1e9, GiB: 1024 ** 3 } as const
+
+export const toBytes = (size: Size): number => {
+  if (typeof size === 'number') return size
+  const [amount, unit] = size.split(' ') as [string, keyof typeof bytesPer]
+  return Number(amount) * bytesPer[unit]
+}
+
 export interface Budget {
   readonly p50?: Duration.Input
   readonly p99?: Duration.Input
   /** Heap growth per operation. Setting it turns on `memory`. */
   readonly heapDelta?: Size
+  /** Share of failed requests in a load bench, e.g. `0.001`. */
+  readonly errorRate?: number
 }
 
 export interface Options {
@@ -35,16 +45,25 @@ export type Operation = Data.TaggedEnum<{
     readonly units?: number
     /** A single operation, for `check`, when `run` performs several. */
     readonly single?: Effect.Effect<unknown, unknown>
+    /** An operation with the same fixed costs and no work; its time is subtracted. */
+    readonly overhead?: Effect.Effect<unknown, unknown>
   }
   PerOp: {
     readonly before: Effect.Effect<unknown, unknown>
     readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
+    readonly overhead?: Effect.Effect<unknown, unknown>
   }
   Stream: { readonly stream: () => Stream.Stream<unknown, unknown> }
   Scenario: {
     readonly before: Effect.Effect<unknown, unknown> | undefined
     readonly run: (input: unknown) => Effect.Effect<unknown, unknown>
     readonly verify: ((value: unknown) => boolean) | undefined
+  }
+  Load: {
+    readonly send: (index: number) => Effect.Effect<unknown, unknown>
+    readonly rps: number
+    readonly durationNs: number
+    readonly isError: (value: unknown) => boolean
   }
 }>
 
@@ -69,6 +88,7 @@ export interface Suite {
   readonly layer: Layer.Layer<never, unknown>
   readonly setup: Effect.Effect<unknown, unknown, any>
   readonly options: Options
+  readonly profiles: ReadonlyArray<string> | undefined
   readonly benches: ReadonlyArray<Bench>
 }
 
@@ -79,6 +99,8 @@ export const Definition = Data.taggedEnum<Definition>()
 export interface SuiteOptions<Ctx, ROut> extends Options {
   readonly layer?: Layer.Layer<ROut, unknown>
   readonly setup?: Effect.Effect<Ctx, unknown, ROut | Scope.Scope>
+  /** Resource profiles from the config this suite runs under when `--profile` names them; default all. */
+  readonly profiles?: ReadonlyArray<string>
 }
 
 type Entry<Ctx, R> = Bench<Ctx, R> | ReadonlyArray<Bench<Ctx, R>>
@@ -86,12 +108,13 @@ type Entry<Ctx, R> = Bench<Ctx, R> | ReadonlyArray<Bench<Ctx, R>>
 export const suite =
   <Ctx = undefined, ROut = never>(name: string, options: SuiteOptions<Ctx, ROut> = {}) =>
   (...entries: ReadonlyArray<Entry<Ctx, ROut>>): Suite => {
-    const { layer, setup, ...defaults } = options
+    const { layer, setup, profiles, ...defaults } = options
     return Definition.Suite({
       name,
       layer: layer ?? Layer.empty,
       setup: setup ?? Effect.undefined,
       options: defaults,
+      profiles,
       benches: entries.flat(),
     })
   }
@@ -122,6 +145,8 @@ export interface Spec<Ctx, I, B, A, E, R> extends BenchOptions<A> {
   /** Runs before every operation, untimed; `run` receives its value. */
   readonly before?: (input: I, ctx: Ctx) => Effect.Effect<B, unknown, R>
   readonly run: (input: B, ctx: Ctx) => Effect.Effect<A, E, R>
+  /** An operation with the same fixed costs as `run` and no work, e.g. an empty transaction; its time is subtracted. */
+  readonly overhead?: (ctx: Ctx) => Effect.Effect<unknown, unknown, R>
 }
 
 /**
@@ -156,19 +181,29 @@ export function make(
       options,
     })
   }
-  const { prepare, before, run: runOne, ...specOptions } = run
+  const { prepare, before, run: runOne, overhead, ...specOptions } = run
   return makeBench({
     name,
     operation: (ctx: unknown) =>
       Effect.gen(function* () {
         const input = prepare === undefined ? undefined : yield* prepare(ctx)
         const context = yield* Effect.context<unknown>()
+        const fixed =
+          overhead === undefined
+            ? {}
+            : {
+                overhead: Effect.provideContext(
+                  Effect.suspend(() => overhead(ctx)),
+                  context
+                ),
+              }
         if (before === undefined) {
           return Operation.Effect({
             run: Effect.provideContext(
               Effect.suspend(() => runOne(input, ctx)),
               context
             ),
+            ...fixed,
           })
         }
         return Operation.PerOp({
@@ -177,6 +212,7 @@ export function make(
             context
           ),
           run: (value: unknown) => Effect.provideContext(runOne(value, ctx), context),
+          ...fixed,
         })
       }),
     options: specOptions,
@@ -351,6 +387,48 @@ export const scenario = <Ctx = unknown, I = undefined, B = I, A = unknown, E = n
     options,
     defaults: { samples: 10, minTime: 0, warmup: 0 },
   })
+
+export interface LoadSpec<Ctx, I, A, E, R> extends BenchOptions<A> {
+  /** Operations started per second, on schedule even when earlier ones have not finished. An array makes one bench per value. */
+  readonly rps: number | ReadonlyArray<number>
+  readonly duration: Duration.Input
+  readonly prepare?: (ctx: Ctx) => Effect.Effect<I, unknown, R>
+  readonly send: (index: number, input: I, ctx: Ctx) => Effect.Effect<A, E, R>
+  /** A successful value that still counts as an error, such as an HTTP 5xx response. */
+  readonly isError?: (value: A) => boolean
+}
+
+/**
+ * Starts operations at a constant rate for `duration` and reports their latency, timed from when each was due to
+ * start so a slow system cannot hide its own queueing. Ids carry the rate, e.g. `listEntries[rps=200]`.
+ */
+export const load = <Ctx = unknown, I = undefined, A = unknown, E = never, R = never>(
+  name: string,
+  { rps, duration, prepare, send, isError, ...options }: LoadSpec<Ctx, I, A, E, R>
+): ReadonlyArray<Bench<Ctx, R>> =>
+  (typeof rps === 'number' ? [rps] : rps).map(rate =>
+    makeBench({
+      name,
+      operation: (ctx: Ctx) =>
+        Effect.gen(function* () {
+          const input = (prepare === undefined ? undefined : yield* prepare(ctx)) as I
+          const context = yield* Effect.context<R>()
+          return Operation.Load({
+            send: index =>
+              Effect.provideContext(
+                Effect.suspend(() => send(index, input, ctx)),
+                context
+              ),
+            rps: rate,
+            durationNs: Number(Duration.toNanosUnsafe(duration)),
+            isError: (isError ?? (() => false)) as (value: unknown) => boolean,
+          })
+        }),
+      options,
+      params: { rps: rate },
+      defaults: { warmup: '1 second' },
+    })
+  )
 
 /** Times part of a scenario. Nested phases are reported as `outer/inner`; outside a scenario it just runs the effect. */
 export const phase = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>

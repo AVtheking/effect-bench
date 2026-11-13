@@ -1,7 +1,10 @@
 import { execFile } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RawResult, Runner } from '@effect-bench/core'
+import { Bench, RawResult, Runner } from '@effect-bench/core'
 import { Console, Effect, Schema } from 'effect'
+import type { Profile } from './Config.ts'
 
 /** Marks result lines so stray console output from bench code is ignored. */
 export const recordPrefix = '@@effect-bench '
@@ -16,12 +19,48 @@ interface ChildOutput {
   readonly exitCode: number | string | null
 }
 
-const spawn = (args: ReadonlyArray<string>) =>
+const commonAncestor = (paths: ReadonlyArray<string>) => {
+  const [first = [], ...rest] = paths.map(path => path.split(sep))
+  const length = first.findIndex((part, index) => rest.some(parts => parts[index] !== part))
+  return (length === -1 ? first : first.slice(0, length)).join(sep) || sep
+}
+
+/**
+ * Runs the same Node and CLI inside a container. The project and the CLI are mounted at their host paths, so module
+ * resolution works unchanged; native addons built for another OS will not load.
+ */
+const dockerCommand = (profile: Profile, node: ReadonlyArray<string>): readonly [string, ReadonlyArray<string>] => {
+  const cwd = process.cwd()
+  const root = commonAncestor([cwd, realpathSync(bin)])
+  return [
+    'docker',
+    [
+      'run',
+      '--rm',
+      ...(profile.cpus === undefined ? [] : ['--cpus', String(profile.cpus)]),
+      ...(profile.memory === undefined
+        ? []
+        : ['--memory', `${Bench.toBytes(profile.memory)}b`, '--memory-swap', `${Bench.toBytes(profile.memory)}b`]),
+      ...(profile.cpuset === undefined ? [] : ['--cpuset-cpus', profile.cpuset]),
+      '--volume',
+      `${root}:${root}:ro`,
+      '--workdir',
+      cwd,
+      ...(profile.dockerArgs ?? []),
+      profile.image ?? `node:${process.versions.node}-slim`,
+      'node',
+      ...node,
+    ],
+  ]
+}
+
+const spawn = (args: ReadonlyArray<string>, profile: Profile | undefined) =>
   Effect.callback<ChildOutput>(resume => {
-    const execArgv = [...new Set([...process.execArgv, '--expose-gc'])]
+    const node = [...new Set([...process.execArgv, '--expose-gc'])].concat(bin, args)
+    const [command, commandArgs] = profile === undefined ? [process.execPath, node] : dockerCommand(profile, node)
     const child = execFile(
-      process.execPath,
-      [...execArgv, bin, ...args],
+      command,
+      commandArgs,
       { maxBuffer: 256 * 1024 * 1024, env: process.env },
       (error, stdout, stderr) =>
         resume(Effect.succeed({ stdout, stderr, exitCode: error === null ? null : (error.code ?? null) }))
@@ -32,15 +71,24 @@ const spawn = (args: ReadonlyArray<string>) =>
 /** Runs one suite in a fresh process and returns its raw records; a crash fails every planned bench. */
 export const measureInChild = Effect.fn('effectBench/measureInChild')(function* (
   planned: ReadonlyArray<Runner.PlannedBench>,
-  options: { readonly suite: string; readonly filter: string | undefined; readonly mode: string | undefined }
+  options: {
+    readonly suite: string
+    readonly filter: string | undefined
+    readonly mode: string | undefined
+    readonly profile: { readonly name: string; readonly settings: Profile } | undefined
+  }
 ) {
-  const output = yield* spawn([
-    'measure',
-    '--suite',
-    options.suite,
-    ...(options.mode === undefined ? [] : ['--mode', options.mode]),
-    ...(options.filter === undefined ? [] : [options.filter]),
-  ])
+  const output = yield* spawn(
+    [
+      'measure',
+      '--suite',
+      options.suite,
+      ...(options.mode === undefined ? [] : ['--mode', options.mode]),
+      ...(options.profile === undefined ? [] : ['--profile', options.profile.name]),
+      ...(options.filter === undefined ? [] : [options.filter]),
+    ],
+    options.profile?.settings
+  )
   const records = output.stdout
     .split('\n')
     .filter(line => line.startsWith(recordPrefix))

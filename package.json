@@ -17,7 +17,7 @@
     "release": "pnpm check && pnpm build && pnpm -r publish"
   },
   "devDependencies": {
-    "@effect/vitest": "4.1.2",
+    "@effect/vitest": "4.1.4",
     "@types/node": "^24.0.0",
     "oxfmt": "^0.64.0",
     "oxlint": "^1.90.0",

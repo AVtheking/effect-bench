@@ -105,11 +105,14 @@ export const RawOk = Schema.Struct({
   overheadNs: Schema.Number,
   heapDeltaBytes: Schema.NullOr(Schema.Number),
   metrics: Metrics,
+  /** Samples are latencies under load: the tail is kept, and ops/s does not apply (see `achievedRps`). */
+  latency: Schema.Boolean,
   limits: Schema.NullOr(
     Schema.Struct({
       p50Ns: Schema.NullOr(Schema.Number),
       p99Ns: Schema.NullOr(Schema.Number),
       heapDeltaBytes: Schema.NullOr(Schema.Number),
+      errorRate: Schema.NullOr(Schema.Number),
     })
   ),
 })

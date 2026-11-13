@@ -2,6 +2,14 @@
   "name": "effect-bench-examples",
   "private": true,
   "type": "module",
-  "scripts": { "bench": "effect-bench run" },
-  "dependencies": { "@effect-bench/cli": "workspace:*", "@effect-bench/core": "workspace:*", "effect": "4.1.2" }
+  "scripts": {
+    "bench": "effect-bench run"
+  },
+  "dependencies": {
+    "@effect-bench/cli": "workspace:*",
+    "@effect-bench/core": "workspace:*",
+    "@effect/platform-node": "4.1.4",
+    "@effect/sql-pglite": "4.1.4",
+    "effect": "4.1.4"
+  }
 }

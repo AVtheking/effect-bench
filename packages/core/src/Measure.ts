@@ -1,4 +1,4 @@
-import { Data, Effect, Stream } from 'effect'
+import { Data, Duration, Effect, Exit, FiberSet, Stream } from 'effect'
 import { Operation } from './Bench.ts'
 import { BenchClock, BenchMemory, BenchPhases, type Clock, type Memory } from './Services.ts'
 import { median } from './Stats.ts'
@@ -98,8 +98,8 @@ const makeBatch = (operation: Batched): Batch =>
 const emptyOperation = (operation: Batched): Batched =>
   Batched.$match(operation, {
     Sync: () => Operation.Sync({ run: () => undefined }),
-    Effect: () => Operation.Effect({ run: Effect.void }),
-    PerOp: () => Operation.PerOp({ before: Effect.void, run: () => Effect.void }),
+    Effect: ({ overhead }) => Operation.Effect({ run: overhead ?? Effect.void }),
+    PerOp: ({ overhead }) => Operation.PerOp({ before: Effect.void, run: () => overhead ?? Effect.void }),
   })
 
 const measureBatched = Effect.fn('effectBench/measureBatched')(function* (operation: Batched, options: MeasureOptions) {
@@ -236,6 +236,48 @@ const measureRuns = Effect.fn('effectBench/measureRuns')(function* (operation: S
   } satisfies Measurement
 })
 
+type Load = Extract<Operation, { readonly _tag: 'Load' }>
+
+const runLoad = (operation: Load, durationNs: number) =>
+  Effect.gen(function* () {
+    const clock = yield* BenchClock
+    const total = Math.max(1, Math.round((durationNs * operation.rps) / 1e9))
+    const intervalNs = 1e9 / operation.rps
+    const latenciesNs: Array<number> = []
+    let errors = 0
+    const fibers = yield* FiberSet.make()
+    const startedAt = clock.nowNs()
+    for (let index = 0; index < total; index++) {
+      const dueAt = startedAt + index * intervalNs
+      const waitMs = Math.floor((dueAt - clock.nowNs()) / 1e6)
+      // Sleeps are millisecond-grained; anything shorter only yields so started operations can progress.
+      yield* waitMs > 0 ? Effect.sleep(Duration.millis(waitMs)) : Effect.yieldNow
+      // Late starts count from when they were due; early ones (sub-millisecond) from when they started.
+      const from = Math.min(dueAt, clock.nowNs())
+      yield* FiberSet.run(
+        fibers,
+        Effect.map(Effect.exit(operation.send(index)), exit => {
+          latenciesNs.push(clock.nowNs() - from)
+          if (Exit.isFailure(exit) || operation.isError(exit.value)) errors++
+        })
+      )
+    }
+    yield* FiberSet.awaitEmpty(fibers)
+    return { latenciesNs, errors, total, elapsedNs: clock.nowNs() - startedAt }
+  }).pipe(Effect.scoped)
+
+const measureLoad = Effect.fn('effectBench/measureLoad')(function* (operation: Load, options: MeasureOptions) {
+  if (options.warmupNs > 0) yield* runLoad(operation, options.warmupNs)
+  const { latenciesNs, errors, total, elapsedNs } = yield* runLoad(operation, operation.durationNs)
+  return {
+    samplesNs: latenciesNs,
+    batchSize: 1,
+    overheadNs: 0,
+    heapDeltaBytes: null,
+    metrics: { requests: total, errors, errorRate: errors / total, achievedRps: total / (elapsedNs / 1e9) },
+  } satisfies Measurement
+})
+
 export const measure = (operation: Operation, options: MeasureOptions): Effect.Effect<Measurement, unknown> =>
   Operation.$match(operation, {
     Sync: batched => measureBatched(batched, options),
@@ -243,4 +285,5 @@ export const measure = (operation: Operation, options: MeasureOptions): Effect.E
     PerOp: batched => measureBatched(batched, options),
     Stream: single => measureRuns(single, options),
     Scenario: single => measureRuns(single, options),
+    Load: load => measureLoad(load, options),
   })

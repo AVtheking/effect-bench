@@ -26,6 +26,10 @@ const forks = Flag.Int('forks').pipe(
   Flag.withDescription('Fresh processes per suite (default 3); 0 measures in this process'),
   Flag.optional
 )
+const profile = Flag.String('profile').pipe(
+  Flag.withDescription('Comma-separated resource profiles from the config; forks run in Docker under each'),
+  Flag.optional
+)
 const threshold = Flag.Finite('threshold').pipe(
   Flag.withDescription('Relative change treated as noise (default 0.03)'),
   Flag.optional
@@ -41,6 +45,19 @@ const platformLayer = (config: Config) => {
   const node = NodeBench.layer({ baselineDirectory: config.baselineDirectory ?? defaults.baselineDirectory })
   return config.layer === undefined ? node : Layer.merge(node, config.layer)
 }
+
+const resolveProfiles = (config: Config, names: string | undefined, forkCount: number) =>
+  Effect.gen(function* () {
+    if (names === undefined) return [undefined]
+    if (forkCount === 0) return yield* Effect.fail('--profile runs forks in Docker, so it needs --forks of 1 or more')
+    const profiles = config.profiles ?? {}
+    return yield* Effect.forEach(names.split(','), name => {
+      const settings = profiles[name.trim()]
+      return settings === undefined
+        ? Effect.fail(`Unknown profile "${name}". Known profiles: ${Object.keys(profiles).join(', ') || 'none'}`)
+        : Effect.succeed({ name: name.trim(), settings })
+    })
+  })
 
 const resolveMode = (config: Config, name: string | undefined) =>
   Effect.gen(function* () {
@@ -62,6 +79,7 @@ const runBenches = (options: {
   readonly quick: boolean
   readonly rigorous: boolean
   readonly forks: Option.Option<number>
+  readonly profile: Option.Option<string>
   readonly threshold: Option.Option<number>
 }) =>
   Effect.gen(function* () {
@@ -70,8 +88,8 @@ const runBenches = (options: {
     const mode = yield* resolveMode(config, modeName)
     const filter = Option.getOrUndefined(options.filter)
     const forkCount = Option.getOrElse(options.forks, () => mode?.forks ?? defaults.forks)
+    const profiles = yield* resolveProfiles(config, Option.getOrUndefined(options.profile), forkCount)
 
-    const plan = Runner.plan(suites, { filter, mode })
     const forksRaw: Array<ReadonlyArray<RawResult>> = []
     if (forkCount === 0) {
       forksRaw.push(yield* Runner.measureSuites(suites, { filter, mode }).pipe(Effect.provide(platformLayer(config))))
@@ -79,14 +97,18 @@ const runBenches = (options: {
     // Fork-major order spreads slow drift (thermal, background load) across every suite instead of one.
     for (let fork = 1; fork <= forkCount; fork++) {
       const raws: Array<RawResult> = []
-      for (const { suite, benches } of plan) {
-        yield* Console.error(`fork ${fork}/${forkCount}  ${suite.name}`)
-        raws.push(
-          ...(yield* measureInChild(
-            benches.map(({ planned }) => planned),
-            { suite: suite.name, filter, mode: modeName }
-          ))
-        )
+      for (const profile of profiles) {
+        for (const { suite, benches } of Runner.plan(suites, { filter, mode, profile: profile?.name })) {
+          yield* Console.error(
+            `fork ${fork}/${forkCount}  ${suite.name}${profile === undefined ? '' : `  profile ${profile.name}`}`
+          )
+          raws.push(
+            ...(yield* measureInChild(
+              benches.map(({ planned }) => planned),
+              { suite: suite.name, filter, mode: modeName, profile }
+            ))
+          )
+        }
       }
       forksRaw.push(raws)
     }
@@ -99,19 +121,19 @@ const runBenches = (options: {
     process.exitCode = summary.exitCode
   })
 
-const measureCommand = Command.make('measure', { filter, mode, suite: Flag.String('suite') }, options =>
+const measureCommand = Command.make('measure', { filter, mode, profile, suite: Flag.String('suite') }, options =>
   Effect.gen(function* () {
     const { config, suites } = yield* load
     const mode = yield* resolveMode(config, Option.getOrUndefined(options.mode))
     const raws = yield* Runner.measureSuites(
       suites.filter(suite => suite.name === options.suite),
-      { filter: Option.getOrUndefined(options.filter), mode }
+      { filter: Option.getOrUndefined(options.filter), mode, profile: Option.getOrUndefined(options.profile) }
     ).pipe(Effect.provide(platformLayer(config)))
     for (const raw of raws) yield* Console.log(`${recordPrefix}${JSON.stringify(raw)}`)
   })
 ).pipe(Command.withDescription('Internal: measure one suite in this process and print raw records'))
 
-const runConfig = { filter, json, save, compare, mode, quick, rigorous, forks, threshold }
+const runConfig = { filter, json, save, compare, mode, quick, rigorous, forks, profile, threshold }
 
 const run = Command.make('run', runConfig, runBenches).pipe(
   Command.withDescription('Run benches, optionally saving or comparing a baseline')

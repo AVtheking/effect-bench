@@ -1,6 +1,6 @@
 {
   "name": "@effect-bench/core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AVtheking/effect-bench.git",
@@ -12,12 +12,15 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "dependencies": {},
+  "scripts": {
+    "prepack": "cp ../../README.md README.md"
+  },
   "peerDependencies": {
     "effect": "^4.1.2"
   },
   "devDependencies": {
-    "effect": "4.1.2"
+    "@effect/sql-pglite": "4.1.4",
+    "effect": "4.1.4"
   },
   "files": [
     "dist/src",
@@ -31,8 +34,5 @@
         "default": "./dist/src/index.js"
       }
     }
-  },
-  "scripts": {
-    "prepack": "cp ../../README.md README.md"
   }
 }

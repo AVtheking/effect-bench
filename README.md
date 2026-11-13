@@ -49,10 +49,13 @@ effect-bench run --rigorous --forks 8   # more processes for a tighter interval
 | `Bench.stream(name, { prepare?, stream })` | a stream run to the end, per item; metrics `firstItem`, `items` and `peakRss` |
 | `Bench.scenario(name, { prepare?, before?, run, verify? })` | a longer flow, timed once per run; `verify` checks every run |
 | `Bench.phase(name, effect)` | times part of a scenario, reported as `phase:name` (nested as `outer/inner`) |
+| `Bench.load(name, { rps, duration, send, isError? })` | operations started at a constant rate; latency per operation, ids like `send[rps=200]` |
+| `SqlBench.make(name, { prepare?, before?, run, rollback? })` | queries through the layer's `SqlClient`, each in a rolled-back transaction |
+| `HttpBench.load(name, { request, rps, duration, isError? })` | requests through the layer's `HttpClient` at a constant rate |
 
 `Bench.suite(name, { layer, setup, ...options })` builds `layer` once per suite and runs `setup` in the suite's scope; its result is the `ctx` each bench receives. Benches can only use services the layer provides — anything else is a type error.
 
-Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap delta per sample), `budget: { p50, p99, heapDelta }`, `tags`, and `check` (validates one result before timing). A `heapDelta` budget such as `'2 MiB'` turns on `memory`. Scenarios default to 10 samples with no warmup time, streams to 10 samples.
+Options (suite or bench): `samples`, `minTime`, `warmup`, `memory` (GC + heap delta per sample), `budget: { p50, p99, heapDelta, errorRate }`, `tags`, and `check` (validates one result before timing). A `heapDelta` budget such as `'2 MiB'` turns on `memory`. Scenarios default to 10 samples with no warmup time, streams to 10 samples.
 
 ```ts
 Bench.scenario('import', {
@@ -66,7 +69,62 @@ Bench.scenario('import', {
 })
 ```
 
-Streams and scenarios add a `metrics` record to each result; the key suffix gives the unit (`firstItemNs`, `peakRssBytes`, `phase:parseNs`). `peakRss` is the whole process's resident memory, so earlier benches in the same process count toward it.
+Streams, scenarios and load benches add a `metrics` record to each result; the key suffix gives the unit (`firstItemNs`, `peakRssBytes`, `phase:parseNs`). `peakRss` is the whole process's resident memory, so earlier benches in the same process count toward it.
+
+## Databases and APIs
+
+The database or server comes from the suite's `layer`; effect-bench never starts one. Point the layer at a local or test instance (for example one started with testcontainers) so network noise stays small.
+
+```ts
+import { Bench, HttpBench, SqlBench } from '@effect-bench/core'
+import { HttpClientRequest } from 'effect/http'
+import { SqlClient } from 'effect/sql'
+
+export default [
+  Bench.suite('entries', { layer: TestDatabase })(
+    SqlBench.make('upsertBatch', {
+      before: () => Effect.sync(() => batchOf(500)),      // untimed
+      run: rows => Effect.flatMap(SqlClient.SqlClient, sql => upsertEntries(sql, rows)),
+    })
+  ),
+  Bench.suite('datasetsApi', { layer: ApiClient })(       // HttpClient with the base URL set
+    HttpBench.load('listEntries', {
+      request: HttpClientRequest.get('/datasets/ds_1/entries?limit=100'),
+      rps: [100, 500],
+      duration: '20 seconds',
+      budget: { p99: '150 millis', errorRate: 0.001 },
+    })
+  ),
+]
+```
+
+- `SqlBench.make` runs each operation in a transaction that is rolled back, so every operation sees the same data. An empty rolled-back transaction is timed and subtracted, so the result is the cost of `run` itself. Commit cost (WAL flush) is not measured, and sequences still advance. `rollback: false` runs it as a plain `Bench.make`.
+- `HttpBench.load` starts requests on schedule whether or not earlier ones have finished, and times each from when it was due, so a slow server cannot hide its own queueing. Responses of 400 and above count as errors unless you pass `isError`. Results keep the latency tail (no outlier removal), have no ops/s, and add `requests`, `errors`, `errorRate` and `achievedRps`. Each fork runs for the whole `duration`, so `--compare` takes `forks × duration` per rate.
+- For one-off latency rather than load, `Bench.make(name, client.get(url))` works too.
+
+## Resource profiles
+
+Profiles run forks inside Docker with CPU and memory limits, so you can see how code behaves on a smaller machine:
+
+```ts
+export default BenchConfig.make({
+  profiles: {
+    small: { cpus: 1, memory: '512 MiB' },
+    large: { cpus: 4, memory: '8 GiB', cpuset: '0-3' },
+  },
+})
+```
+
+```bash
+effect-bench run --profile small,large --json
+```
+
+Every id gets a `profile` param (`import/parse[profile=small]`), so baselines compare like with like. A suite with `profiles: ['large']` only runs under those. Each fork runs `node:<your Node version>-slim` with the project mounted read-only at the same path; `image` and `dockerArgs` (for example `['-e', 'DATABASE_URL', '--network', 'host']`) override that.
+
+- On macOS and Windows, Docker runs in a Linux VM, so profile numbers are not comparable to native runs; compare profiles with each other, or run them in Linux CI.
+- Native addons built for the host OS will not load in the container.
+- Inside the container, `localhost` is the container. Reach a database on the host with `host.docker.internal` or `--network host`.
+- Starting a container adds about a second per fork.
 
 ## Output
 
@@ -110,3 +168,4 @@ export default BenchConfig.make({
 ## Known limitations
 
 - Bench files are loaded with Node's built-in type stripping, so they must use erasable TypeScript syntax only.
+- Load benches sleep with millisecond resolution; above roughly 1,000 rps, operations start in small bursts rather than evenly.

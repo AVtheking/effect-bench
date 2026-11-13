@@ -14,13 +14,13 @@ export const median = (values: ReadonlyArray<number>): number =>
     0.5
   )
 
-/** Drops Tukey outliers (outside 1.5 × IQR) before summarising. */
-export const compute = (samplesNs: ReadonlyArray<number>): StatsType => {
+/** Drops Tukey outliers (outside 1.5 × IQR) before summarising, unless `keepOutliers` (load latencies, where the tail is the point). */
+export const compute = (samplesNs: ReadonlyArray<number>, keepOutliers = false): StatsType => {
   const sorted = [...samplesNs].sort((a, b) => a - b)
   const q1 = quantile(sorted, 0.25)
   const q3 = quantile(sorted, 0.75)
   const fence = 1.5 * (q3 - q1)
-  const kept = sorted.filter(value => value >= q1 - fence && value <= q3 + fence)
+  const kept = keepOutliers ? sorted : sorted.filter(value => value >= q1 - fence && value <= q3 + fence)
   const n = kept.length
   const mean = kept.reduce((sum, value) => sum + value, 0) / n
   const variance = n > 1 ? kept.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (n - 1) : 0
@@ -50,6 +50,8 @@ export const formatNs = (ns: number): string => {
   for (const [scale, unit] of units) if (Math.abs(ns) >= scale) return `${(ns / scale).toPrecision(3)} ${unit}`
   return `${ns.toPrecision(3)} ns`
 }
+
+export const formatPercent = (fraction: number): string => `${(fraction * 100).toPrecision(3)}%`
 
 export const formatBytes = (bytes: number): string => {
   const units = ['B', 'KiB', 'MiB', 'GiB'] as const
